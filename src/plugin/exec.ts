@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import type { GenerationContext } from "@utils/generationContext";
@@ -18,10 +18,46 @@ type ExecResult = {
 function abortError(reason?: unknown): Error {
   if (reason instanceof Error) return reason;
   if (typeof reason === "string") return new Error(reason);
-  return new Error("Shell command aborted");
+  return new Error("Command aborted");
 }
 
-function runOwnedExec(shellCommand: string, lifecycle: GenerationContext): Promise<ExecResult> {
+function parseCommand(command: string): { file: string; args: string[] } | null {
+  const tokens: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  let quoteChar = "";
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+
+    if ((char === '"' || char === "'") && !inQuotes) {
+      inQuotes = true;
+      quoteChar = char;
+    } else if (char === quoteChar && inQuotes) {
+      inQuotes = false;
+      quoteChar = "";
+    } else if (char === " " && !inQuotes) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (current) tokens.push(current);
+
+  if (tokens.length === 0) return null;
+  return { file: tokens[0], args: tokens.slice(1) };
+}
+
+function runOwnedExec(command: string, lifecycle: GenerationContext): Promise<ExecResult> {
+  const parsed = parseCommand(command);
+  if (!parsed) {
+    return Promise.reject(new Error("Empty command"));
+  }
+  const { file, args } = parsed;
+
   return lifecycle.runTask(
     async (signal) =>
       await new Promise<ExecResult>((resolve, reject) => {
@@ -34,14 +70,14 @@ function runOwnedExec(shellCommand: string, lifecycle: GenerationContext): Promi
           callback();
         };
 
-        const child = lifecycle.trackChildProcess(exec(shellCommand, (error, stdout, stderr) => {
+        const child = lifecycle.trackChildProcess(execFile(file, args, (error, stdout, stderr) => {
           if (error) {
             finish(() => reject(error));
             return;
           }
           finish(() => resolve({ stdout, stderr }));
         }), {
-          label: "exec:shell-command",
+          label: "exec:command",
         });
 
         const onAbort = (): void => {
@@ -62,15 +98,15 @@ function runOwnedExec(shellCommand: string, lifecycle: GenerationContext): Promi
   );
 }
 
-async function handleExec(params: { msg: Api.Message; shellCommand: string; lifecycle: GenerationContext }) {
-  const { msg, shellCommand, lifecycle } = params;
+async function handleExec(params: { msg: Api.Message; command: string; lifecycle: GenerationContext }) {
+  const { msg, command, lifecycle } = params;
 
   const start = Date.now();
 
   await msg.edit({
     text:
-      `✅ 已开始执行 shell 命令…\n` +
-      `命令：\`${shellCommand}\`\n` +
+      `✅ 已开始执行命令…\n` +
+      `命令：\`${command}\`\n` +
       `状态：运行中 0s`,
     parseMode: "markdown",
   });
@@ -82,15 +118,15 @@ async function handleExec(params: { msg: Api.Message; shellCommand: string; life
     const cost = ((Date.now() - start) / 1000).toFixed(0);
     void msg.edit({
       text:
-        `✅ 已开始执行 shell 命令…\n` +
-        `命令：\`${shellCommand}\`\n` +
+        `✅ 已开始执行命令…\n` +
+        `命令：\`${command}\`\n` +
         `状态：运行中 ${cost}s`,
       parseMode: "markdown",
     }).catch(() => undefined);
   }, 2000, { label: "exec:status-interval" });
 
   try {
-    const { stdout, stderr } = await runOwnedExec(shellCommand, lifecycle);
+    const { stdout, stderr } = await runOwnedExec(command, lifecycle);
     stopped = true;
     clearInterval(timer);
 
@@ -98,7 +134,7 @@ async function handleExec(params: { msg: Api.Message; shellCommand: string; life
 
     let text =
       `✅ 执行完成（${(costMs / 1000).toFixed(2)}s）\n` +
-      `命令：\`${shellCommand}\`\n\n` +
+      `命令：\`${command}\`\n\n` +
       `shell 输出：\n${stdout || "(无输出)"}`;
 
     if (stderr) {
@@ -118,7 +154,7 @@ async function handleExec(params: { msg: Api.Message; shellCommand: string; life
     await msg.edit({
       text: truncate(
         `❌ 执行失败（${(costMs / 1000).toFixed(2)}s）\n` +
-          `命令：\`${shellCommand}\`\n\n` +
+          `命令：\`${command}\`\n\n` +
           `错误：${String(error)}`
       ),
       parseMode: "markdown",
@@ -160,8 +196,8 @@ class ExecPlugin extends Plugin {
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     exec: async (msg) => {
       const lifecycle = this.resolveLifecycle();
-      const shellCommand = msg.message.slice(1).replace(/^\S+\s+/, "");
-      await handleExec({ msg, shellCommand, lifecycle });
+      const command = msg.message.slice(1).replace(/^\S+\s+/, "");
+      await handleExec({ msg, command, lifecycle });
     },
   };
 }
