@@ -40,9 +40,10 @@ if (majorVersion >= 22) {
   env.NODE_OPTIONS = existing ? `${existing} ${flag}` : flag;
 }
 
-// Limit V8 heap to 192 MB and expose gc() for the health plugin.
-// Without this, V8 can grow heap unbounded during active channel hours.
-const heapFlags = '--max-old-space-size=192 --expose-gc';
+// Limit V8 heap to 512 MB and expose gc() for the health plugin.
+// 192 MB was too low for teleproto's baseline (233+ MB), causing repeated
+// OOM crashes. 512 MB matches PM2 max_memory_restart for graceful restart.
+const heapFlags = '--max-old-space-size=512 --expose-gc';
 const existingOpts = (env.NODE_OPTIONS || '').trim();
 env.NODE_OPTIONS = existingOpts ? `${existingOpts} ${heapFlags}` : heapFlags;
 
