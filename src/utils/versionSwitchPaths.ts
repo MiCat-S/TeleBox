@@ -1180,25 +1180,49 @@ export function pm2StartEdition(
   // Also drop mis-pointed "telebox" if starting mtcute from old flat cwd, etc.
   const command = "exec node scripts/run-tsx.cjs ./src/index.ts";
   // mtcute: heap=512MB + RSS threshold=768MB → PM2 restart at 768M
-  // teleproto: heap=192MB + RSS threshold=512MB → PM2 restart at 512M
+  // teleproto: heap=512MB + RSS threshold=512MB → PM2 restart at 512M
   const maxMemRestart = version === "mtcute" ? "768M" : "512M";
-  runPm2(
-    [
-      "start",
-      "bash",
-      "--name",
-      name,
-      "--cwd",
-      repoRoot,
-      "--time",
-      "--max-memory-restart",
-      maxMemRestart,
-      "--restart-delay",
-      "5000",
-      "--",
-      "-lc",
-      command,
-    ],
-    `start ${name} cwd=${repoRoot}`,
-  );
+  // Sanitize NODE_OPTIONS: the controller may be spawned from the peer
+  // edition's PM2 process tree (setsid detach) and inherit its V8 tuning
+  // (e.g. mtcute's --max-semi-space-size=128). PM2 bakes the inherited
+  // env into the new process, where it combines with run-tsx's own flags
+  // into duplicate/contradictory heap limits → FATAL OOM loop at startup.
+  // Strip peer-edition V8 tuning here so the child starts from a clean
+  // slate; run-tsx.cjs re-adds its own correct flags.
+  const savedNodeOptions = process.env.NODE_OPTIONS;
+  if (savedNodeOptions) {
+    process.env.NODE_OPTIONS = savedNodeOptions
+      .replace(/--max-old-space-size=\d+/g, "")
+      .replace(/--max-semi-space-size=\d+/g, "")
+      .replace(/--localstorage-file=\S+/g, "")
+      .trim();
+    if (!process.env.NODE_OPTIONS) delete process.env.NODE_OPTIONS;
+  }
+  try {
+    runPm2(
+      [
+        "start",
+        "bash",
+        "--name",
+        name,
+        "--cwd",
+        repoRoot,
+        "--time",
+        "--max-memory-restart",
+        maxMemRestart,
+        "--restart-delay",
+        "5000",
+        "--",
+        "-lc",
+        command,
+      ],
+      `start ${name} cwd=${repoRoot}`,
+    );
+  } finally {
+    if (savedNodeOptions !== undefined) {
+      process.env.NODE_OPTIONS = savedNodeOptions;
+    } else {
+      delete process.env.NODE_OPTIONS;
+    }
+  }
 }
