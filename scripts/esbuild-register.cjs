@@ -63,6 +63,12 @@ function getCachedPluginPath(filename) {
       const relPath = path.relative(PROJECT_ROOT, normalized);
       const cachePath = path.join(CACHE_DIR, relPath.replace(/\.ts$/, '.js'));
       if (fs.existsSync(cachePath)) {
+        // 源文件比缓存新（如插件热更新后未重跑 precompile）→ 缓存失效，回退到即时编译
+        try {
+          if (fs.statSync(normalized).mtimeMs > fs.statSync(cachePath).mtimeMs) {
+            return null;
+          }
+        } catch { /* stat 失败则继续用缓存 */ }
         return cachePath;
       }
     }
