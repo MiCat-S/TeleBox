@@ -36,16 +36,28 @@ const env = { ...process.env };
 // Only add --localstorage-file for Node.js 22+
 if (majorVersion >= 22) {
   const flag = `--localstorage-file=${lsFile}`;
-  const existing = (env.NODE_OPTIONS || '').trim();
+  let existing = (env.NODE_OPTIONS || '').trim();
+  // Deduplicate any inherited --localstorage-file to avoid V8 flag confusion
+  existing = existing.replace(/--localstorage-file=\S+/g, '').trim();
   env.NODE_OPTIONS = existing ? `${existing} ${flag}` : flag;
 }
 
 // Limit V8 heap to 512 MB and expose gc() for the health plugin.
 // 192 MB was too low for teleproto's baseline (233+ MB), causing repeated
 // OOM crashes. 512 MB matches PM2 max_memory_restart for graceful restart.
-const heapFlags = '--max-old-space-size=512 --expose-gc';
-const existingOpts = (env.NODE_OPTIONS || '').trim();
-env.NODE_OPTIONS = existingOpts ? `${existingOpts} ${heapFlags}` : heapFlags;
+// Replace any existing --max-old-space-size so an inherited mtcute-era
+// NODE_OPTIONS (e.g. --max-semi-space-size) cannot confuse V8 heap config.
+const heapFlag = '--max-old-space-size=512';
+let existingOpts = (env.NODE_OPTIONS || '').trim();
+existingOpts = existingOpts.replace(/--max-old-space-size=\d+/g, '').trim();
+env.NODE_OPTIONS = existingOpts ? `${existingOpts} ${heapFlag} --expose-gc` : `${heapFlag} --expose-gc`;
+
+// Strip any inherited --max-semi-space-size (mtcute-specific tuning) —
+// teleproto's baseline doesn't need a 128 MB young generation, and combining
+// it with a fresh 512 MB old-space cap blew past the heap limit at startup.
+existingOpts = (env.NODE_OPTIONS || '').trim();
+existingOpts = existingOpts.replace(/--max-semi-space-size=\d+/g, '').trim();
+env.NODE_OPTIONS = existingOpts ? existingOpts : env.NODE_OPTIONS;
 
 // Use esbuild-register instead of tsx to eliminate heap waste from
 // inline source maps, CJS polyfill duplication, and source string retention.
