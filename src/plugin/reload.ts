@@ -269,7 +269,7 @@ class ReloadPlugin extends Plugin {
     reload: async (msg) => {
       const client = await getGlobalClient();
 
-const statusMessage = await client.sendMessage(msg.chatId, {
+const statusMessage = await client.sendMessage(msg.chatId ?? msg.peerId, {
   message: "🔄 正在重新加载插件...",
   replyTo: msg.id,
 });

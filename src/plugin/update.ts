@@ -271,10 +271,10 @@ async function checkPluginsUpdate(): Promise<boolean | null> {
 async function handleVersion(msg: Api.Message): Promise<void> {
   const client = await getGlobalClient();
 
-const statusMessage = await client.sendMessage(msg.chatId, {
+const statusMessage = await client.sendMessage(msg.chatId ?? msg.peerId, {
   message: "🔍 正在检查版本...",
   replyTo: msg.id,
-});;
+});
 
   const display = readDisplayVersion();
   const [mainUpdate, pluginUpdate] = await Promise.all([
@@ -392,7 +392,7 @@ async function handleAutofix(msg: Api.Message): Promise<void> {
     const detail = getErrorMessage(error) || String(error);
     console.error("[autofix] 修复失败:", detail);
     try {
-      await statusMessage.edit({ text: `❌ 修复失败：${detail}` });
+      await msg.edit({ text: `❌ 修复失败：${detail}` });
     } catch {
       /* ignore */
     }
@@ -428,10 +428,10 @@ async function remotePackageJsonChanged(remote: string, branch: string): Promise
 async function update(force = false, msg: Api.Message) {
   const client = await getGlobalClient();
 
-const statusMessage = await client.sendMessage(msg.chatId, {
+const statusMessage = await client.sendMessage(msg.chatId ?? msg.peerId, {
   message: "🚀 正在更新项目...",
   replyTo: msg.id,
-});;
+});
   console.clear();
   console.log("🚀 开始更新项目...\n");
 

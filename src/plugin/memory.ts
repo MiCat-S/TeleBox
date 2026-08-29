@@ -564,9 +564,9 @@ const HELP_TEXT = `🧠 <b>Memory · 内存守护 & 系统状态</b>
 📖 <b>常用命令</b>
 • <code>${mainPrefix}memory health</code>
   查看现在内存用了多少、是否安全
-• <code>${mainPrefix}memory status</code>
+• <code>${mainPrefix}memory status</code> / <code>${mainPrefix}status</code>
   查看系统运行状态（CPU、内存、磁盘等）
-• <code>${mainPrefix}memory sysinfo</code>
+• <code>${mainPrefix}memory sysinfo</code> / <code>${mainPrefix}sysinfo</code>
   以 sysinfo 格式显示系统信息
 • <code>${mainPrefix}memory on</code> / <code>${mainPrefix}memory off</code>
   打开 / 关闭自动保护
@@ -939,6 +939,32 @@ class MemoryPlugin extends Plugin {
 
       // ── help / default ──
       await msg.edit({ text: HELP_TEXT, parseMode: "html" });
+    },
+
+    // ── top-level status (matches README: `.status`) ──
+    status: async (msg) => {
+      const parts = msg.text?.trim().split(/\s+/) || [];
+      const sub = parts[1]?.toLowerCase();
+      if (sub === "lifecycle") {
+        await this.handleLifecycleStatus(msg);
+        return;
+      }
+      if (sub === "stress") {
+        await this.handleLifecycleStress(msg);
+        return;
+      }
+      await this.showStatus(msg);
+    },
+
+    // ── top-level sysinfo (matches README: `.sysinfo`) ──
+    sysinfo: async (msg) => {
+      try {
+        await msg.edit({ text: "🔄 正在获取系统信息...", parseMode: "html" });
+        const sysInfo = await this.getSystemInfo();
+        await msg.edit({ text: sysInfo, parseMode: "html" });
+      } catch (error) {
+        await this.handleError(msg, error, "sysinfo");
+      }
     },
   };
 
