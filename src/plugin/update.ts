@@ -269,7 +269,12 @@ async function checkPluginsUpdate(): Promise<boolean | null> {
 }
 
 async function handleVersion(msg: Api.Message): Promise<void> {
-  await msg.edit({ text: "🔍 正在检查版本..." });
+  const client = await getGlobalClient();
+
+const statusMessage = await client.sendMessage(msg.chatId, {
+  message: "🔍 正在检查版本...",
+  replyTo: msg.id,
+});;
 
   const display = readDisplayVersion();
   const [mainUpdate, pluginUpdate] = await Promise.all([
@@ -296,7 +301,7 @@ async function handleVersion(msg: Api.Message): Promise<void> {
     `${mainLine}\n\n` +
     `${pluginLine}`;
 
-  await msg.edit({ text, parseMode: "html" });
+  await statusMessage.edit({ text, parseMode: "html" });
 }
 
 // ── Autofix: remove colliding plugins ──────────────────────────────────
@@ -387,7 +392,7 @@ async function handleAutofix(msg: Api.Message): Promise<void> {
     const detail = getErrorMessage(error) || String(error);
     console.error("[autofix] 修复失败:", detail);
     try {
-      await msg.edit({ text: `❌ 修复失败：${detail}` });
+      await statusMessage.edit({ text: `❌ 修复失败：${detail}` });
     } catch {
       /* ignore */
     }
@@ -421,7 +426,12 @@ async function remotePackageJsonChanged(remote: string, branch: string): Promise
 
 // ── Manual update (existing) ───────────────────────────────────────────
 async function update(force = false, msg: Api.Message) {
-  await msg.edit({ text: "🚀 正在更新项目..." });
+  const client = await getGlobalClient();
+
+const statusMessage = await client.sendMessage(msg.chatId, {
+  message: "🚀 正在更新项目...",
+  replyTo: msg.id,
+});;
   console.clear();
   console.log("🚀 开始更新项目...\n");
 
@@ -435,26 +445,26 @@ async function update(force = false, msg: Api.Message) {
     const fullBranch = `${remote}/${branch}`;
 
     await gitExec(["fetch", "--all"]);
-    await msg.edit({ text: "🔄 正在拉取最新代码..." });
+    await statusMessage.edit({ text: "🔄 正在拉取最新代码..." });
 
     // package.json 变更时自动走 -f：硬重置到远程，避免依赖声明冲突/半更新
     if (!force && (await remotePackageJsonChanged(remote, branch))) {
       force = true;
       console.log("📦 检测到 package.json 变更，自动切换为强制更新（等同 .update -f）");
-      await msg.edit({ text: "📦 检测到 package.json 变更，自动强制更新..." });
+      await statusMessage.edit({ text: "📦 检测到 package.json 变更，自动强制更新..." });
     }
 
     if (force) {
       console.log(`⚠️ 强制回滚到 ${fullBranch}...`);
       await gitExec(["reset", "--hard", fullBranch]);
-      await msg.edit({ text: "🔄 强制更新中..." });
+      await statusMessage.edit({ text: "🔄 强制更新中..." });
     } else {
       await gitExec(["pull", remote, branch, "--no-rebase"]);
-      await msg.edit({ text: "🔄 正在合并最新代码..." });
+      await statusMessage.edit({ text: "🔄 正在合并最新代码..." });
     }
 
     console.log("\n📦 安装依赖...");
-    await msg.edit({ text: "📦 正在安装依赖..." });
+    await statusMessage.edit({ text: "📦 正在安装依赖..." });
     await npm_install_project_dependencies();
 
     console.log("\n✅ 更新完成。");
@@ -476,7 +486,7 @@ async function update(force = false, msg: Api.Message) {
       "如果是 Git 冲突，请手动解决后再更新，或使用 .update -f 强制更新（会丢弃本地改动）";
 
     try {
-      await msg.edit({ text: errorText });
+      await statusMessage.edit({ text: errorText });
     } catch (editError) {
       console.error("Failed to send error message after update failure:", editError);
       try {

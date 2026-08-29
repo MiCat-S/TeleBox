@@ -267,7 +267,12 @@ class ReloadPlugin extends Plugin {
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     reload: async (msg) => {
-      const statusMessage = await msg.edit({ text: "🔄 正在重新加载插件..." });
+      const client = await getGlobalClient();
+
+const statusMessage = await client.sendMessage(msg.chatId, {
+  message: "🔄 正在重新加载插件...",
+  replyTo: msg.id,
+});
       const targetChat =
         resolvePersistableChatId(msg, statusMessage as Api.Message | undefined) ||
         statusMessage?.chatId ||
