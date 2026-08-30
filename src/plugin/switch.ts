@@ -29,6 +29,7 @@ import { markSwitchInProgress, clearSwitchInProgress,
   readProgressSnapshot,
   clearProgressSnapshot,
   isSwitchInProgress,
+  type SwitchLockOwner,
 } from "@utils/versionSwitchProgress";
 import { htmlEscape } from "@utils/htmlEscape";
 
@@ -140,7 +141,11 @@ const T = {
     `不知道 <code>${htmlEscape(sub)}</code> 是什么命令。\n\n` + T.help(),
 };
 
-function spawnController(source: TeleBoxVersion, target: TeleBoxVersion): void {
+function spawnController(
+  source: TeleBoxVersion,
+  target: TeleBoxVersion,
+  lockOwner: SwitchLockOwner,
+): void {
   // Run controller from SOURCE edition (always installed + deps ready).
   // Target may not exist yet — controller prepares it with live progress.
   // Never spawn bare "npx" (ENOENT under PM2).
@@ -165,6 +170,8 @@ function spawnController(source: TeleBoxVersion, target: TeleBoxVersion): void {
         SWITCH_SKIP_LOGIN: "0",
         SWITCH_SOURCE: source,
         SWITCH_TARGET: target,
+        SWITCH_LOCK_OWNER_PID: String(lockOwner.pid),
+        SWITCH_LOCK_NONCE: lockOwner.nonce,
       },
     },
   );
@@ -174,6 +181,9 @@ function spawnController(source: TeleBoxVersion, target: TeleBoxVersion): void {
     } catch {
       /* ignore */
     }
+  });
+  child.once("error", () => {
+    clearSwitchInProgress(lockOwner, DEFAULT_SWITCH_HOME);
   });
   // Detach fully: parent must not wait, and PM2 must not track this tree.
   child.unref();
@@ -226,12 +236,6 @@ const plugin = new (class extends Plugin {
   };
 
   private async handleGo(msg: Api.Message): Promise<void> {
-    // Prevent multiple simultaneous switches
-    if (isSwitchInProgress(DEFAULT_SWITCH_HOME)) {
-      await msg.edit({ text: "⚠️ 版本切换已在进行中，请等待完成后再试。" });
-      return;
-    }
-
     const current = detectCurrentVersion();
     const target: TeleBoxVersion = current === "teleproto" ? "mtcute" : "teleproto";
     const state = loadSwitchState(DEFAULT_SWITCH_HOME);
@@ -251,21 +255,37 @@ const plugin = new (class extends Plugin {
       });
       return;
     }
-    clearProgressSnapshot(DEFAULT_SWITCH_HOME);
-    markSwitchInProgress({ source: current, target, reason: "plugin-go" });
-    state.pendingNotification = {
-      chatId,
-      msgId: msg.id,
-      target,
-    };
-    state.pendingLogin = null;
-    state.stagedSecrets = {};
-    saveSwitchState(state, DEFAULT_SWITCH_HOME);
+
+    let lockOwner: SwitchLockOwner;
     try {
-      spawnController(current, target);
+      lockOwner = markSwitchInProgress(
+        { source: current, target, reason: "plugin-go" },
+        DEFAULT_SWITCH_HOME,
+      );
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code === "EEXIST" ||
+        isSwitchInProgress(DEFAULT_SWITCH_HOME)
+      ) {
+        await msg.edit({ text: "⚠️ 版本切换已在进行中，请等待完成后再试。" });
+        return;
+      }
+      throw error;
+    }
+    clearProgressSnapshot(DEFAULT_SWITCH_HOME);
+    try {
+      state.pendingNotification = {
+        chatId,
+        msgId: msg.id,
+        target,
+      };
+      state.pendingLogin = null;
+      state.stagedSecrets = {};
+      saveSwitchState(state, DEFAULT_SWITCH_HOME);
+      spawnController(current, target, lockOwner);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      clearSwitchInProgress();
+      clearSwitchInProgress(lockOwner, DEFAULT_SWITCH_HOME);
       await msg.edit({
         text: [
           `❌ 无法启动切换`,

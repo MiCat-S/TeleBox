@@ -45,18 +45,25 @@ import {
   ensureNestedLayout,
   completePendingNest,
   convertNestedToFlat,
+  createLayoutMoveJournal,
+  rollbackLayoutMoveJournal,
+  commitLayoutMoveJournal,
   pm2StartEdition,
   prepareEdition,
   PEER_DIR_NAME,
   isRunnableRepo,
+  type LayoutMoveJournal,
 } from "./versionSwitchPaths";
 import {
   SwitchProgressReporter,
   markSwitchInProgress,
+  claimSwitchInProgress,
   clearSwitchInProgress,
+  type SwitchLockOwner,
 } from "./versionSwitchProgress";
 import fs from "fs";
 import path from "path";
+import { writePrivateJsonAtomic } from "./apiConfig";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -76,6 +83,13 @@ const PM2_NAMES: Record<"teleproto" | "mtcute", string> = {
 
 const READY_TIMEOUT_MS = 60_000;
 const READY_POLL_MS = 2_000;
+let switchLockOwner: SwitchLockOwner | null = null;
+
+function releaseSwitchLock(): void {
+  if (!switchLockOwner) return;
+  clearSwitchInProgress(switchLockOwner, DEFAULT_SWITCH_HOME);
+  switchLockOwner = null;
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -266,9 +280,27 @@ async function main(): Promise<void> {
     );
   }
 
+  const inheritedLockPid = Number(process.env.SWITCH_LOCK_OWNER_PID);
+  const inheritedLockNonce = process.env.SWITCH_LOCK_NONCE?.trim();
+  if (
+    Number.isInteger(inheritedLockPid) &&
+    inheritedLockPid > 0 &&
+    inheritedLockNonce
+  ) {
+    switchLockOwner = claimSwitchInProgress(
+      { pid: inheritedLockPid, nonce: inheritedLockNonce },
+      { source, target, reason: "controller" },
+      DEFAULT_SWITCH_HOME,
+    );
+  } else {
+    switchLockOwner = markSwitchInProgress(
+      { source, target, reason: "controller" },
+      DEFAULT_SWITCH_HOME,
+    );
+  }
+
   // Live progress on the original .switch go message (works after PM2 stop)
   progress = new SwitchProgressReporter(source, target);
-  markSwitchInProgress({ source, target, reason: "controller" });
   await progress.init();
   await progress.set("layout", "running", `准备 ${PEER_DIR_NAME[target]}…`);
 
@@ -300,6 +332,7 @@ async function main(): Promise<void> {
     console.error("[controller] prepare target failed:", err);
     await progress.fail(msg);
     await progress.close();
+    releaseSwitchLock();
     process.exit(1);
   }
 
@@ -320,6 +353,7 @@ async function main(): Promise<void> {
       state.stagedSecrets = {};
       saveSwitchState(state, DEFAULT_SWITCH_HOME);
       await progress.close();
+      releaseSwitchLock();
       process.exit(1);
     }
     extPath = resolveExternalSessionPath(target, DEFAULT_SWITCH_HOME) ?? "";
@@ -346,6 +380,7 @@ async function main(): Promise<void> {
     let archivedCount = 0;
     let pluginJournal: InstalledPluginJournal | null = null;
     let dataJournal: PluginDataJournal | null = null;
+    let layoutJournal: LayoutMoveJournal | null = null;
 
     if (sourceIndex && targetIndex) {
       const matched = matchPlugins(
@@ -495,7 +530,12 @@ async function main(): Promise<void> {
     if (!layoutState.flat) {
       await progress.set("flatten", "running");
       console.log(`[controller] Converting nested layout to flat…`);
-      const flatLayout = convertNestedToFlat(layoutState.home);
+      layoutJournal = layoutJournal ?? createLayoutMoveJournal();
+      const flatLayout = convertNestedToFlat(
+        layoutState.home,
+        layoutJournal,
+      );
+      layoutJournal = flatLayout.moveJournal ?? layoutJournal;
       REPO_ROOTS = flatLayout.roots;
       console.log(
         `[controller] Flat layout ready: teleproto=${REPO_ROOTS.teleproto} mtcute=${REPO_ROOTS.mtcute}`,
@@ -516,7 +556,13 @@ async function main(): Promise<void> {
       console.log(
         `[controller] Nesting flat install into ${PEER_DIR_NAME[nestState.pendingNest.version]}…`,
       );
-      completePendingNest(nestState.pendingNest, nestState.home);
+      layoutJournal = layoutJournal ?? createLayoutMoveJournal();
+      const moveResult = completePendingNest(
+        nestState.pendingNest,
+        nestState.home,
+        layoutJournal,
+      );
+      layoutJournal = moveResult.journal;
       REPO_ROOTS = resolveRepoRoots();
       console.log(
         `[controller] Nested layout ready: teleproto=${REPO_ROOTS.teleproto} mtcute=${REPO_ROOTS.mtcute}`,
@@ -613,7 +659,8 @@ async function main(): Promise<void> {
     }
 
     await progress.done("目标版本已上线，正在完成最终通知…");
-    clearSwitchInProgress();
+    if (layoutJournal) commitLayoutMoveJournal(layoutJournal);
+    releaseSwitchLock();
     await progress.close();
   } catch (err) {
     console.error("[controller] Switch failed, rolling back...", err);
@@ -632,10 +679,26 @@ async function main(): Promise<void> {
 
     try {
       pm2("stop", PM2_NAMES[target]);
-      pm2("restart", PM2_NAMES[source]);
-      console.log("[controller] ✅ Rollback complete, source restarted.");
-    } catch (rollbackErr) {
-      console.error("[controller] Rollback (PM2) failed:", rollbackErr);
+    } catch (stopErr) {
+      console.error("[controller] Rollback target stop failed:", stopErr);
+    }
+
+    try {
+      if (layoutJournal) rollbackLayoutMoveJournal(layoutJournal);
+    } catch (layoutErr) {
+      console.error("[controller] Rollback layout failed; source restart will still be attempted:", layoutErr);
+    } finally {
+      try {
+        REPO_ROOTS = resolveRepoRoots({ prepareMissing: false });
+      } catch (resolveErr) {
+        console.error("[controller] Failed to re-resolve repo roots after rollback:", resolveErr);
+      }
+      try {
+        pm2("restart", PM2_NAMES[source]);
+        console.log("[controller] ✅ Source restart attempted after rollback.");
+      } catch (restartErr) {
+        console.error("[controller] Rollback source restart failed:", restartErr);
+      }
     }
 
     const failState = loadSwitchState(DEFAULT_SWITCH_HOME);
@@ -649,7 +712,7 @@ async function main(): Promise<void> {
     try {
       await progress?.close();
     } catch { /* ignore */ }
-    clearSwitchInProgress();
+    releaseSwitchLock();
     process.exit(1);
   }
 }
@@ -744,8 +807,7 @@ function ensureEditionConfig(
   if (existing?.session) next.session = existing.session;
   if (existing?._switchSessionPath) next._switchSessionPath = existing._switchSessionPath;
 
-  fs.mkdirSync(repo, { recursive: true });
-  fs.writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`);
+  writePrivateJsonAtomic(configPath, next);
   console.log(`[controller] Wrote ${configPath} (auto-seeded api credentials for zero-config switch)`);
   return configPath;
 }
@@ -757,7 +819,7 @@ function clearSwitchSessionMarker(version: "teleproto" | "mtcute"): void {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
     if ("_switchSessionPath" in config) {
       delete config._switchSessionPath;
-      fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      writePrivateJsonAtomic(configPath, config);
     }
   } catch { /* ignore */ }
 }
@@ -774,7 +836,7 @@ function injectSessionConfig(version: "teleproto" | "mtcute", extPath: string): 
     const sessionStr = fs.readFileSync(extPath, "utf8").trim();
     const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
     config.session = sessionStr;
-    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    writePrivateJsonAtomic(configPath, config);
     console.log(`[controller] Injected teleproto session into ${configPath}`);
   } else {
     // mtcute: external SQLite path via _switchSessionPath (see mtcuteClient.ts)
@@ -783,13 +845,13 @@ function injectSessionConfig(version: "teleproto" | "mtcute", extPath: string): 
     }
     const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
     config._switchSessionPath = extPath;
-    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    writePrivateJsonAtomic(configPath, config);
     console.log(`[controller] Injected mtcute session marker → ${extPath}`);
   }
 }
 
 main().catch((err) => {
   console.error("[controller] Fatal:", err);
-  try { clearSwitchInProgress(); } catch { /* ignore */ }
+  try { releaseSwitchLock(); } catch { /* ignore */ }
   process.exit(1);
 });

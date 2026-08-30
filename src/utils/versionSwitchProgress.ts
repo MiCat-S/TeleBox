@@ -9,6 +9,7 @@
  */
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import type { TeleBoxVersion } from "./versionSwitchState";
 import { DEFAULT_SWITCH_HOME } from "./versionSwitchState";
 
@@ -153,48 +154,181 @@ export function switchInProgressLock(home = DEFAULT_SWITCH_HOME): string {
   return path.join(home, "in-progress.lock");
 }
 
+export interface SwitchLockOwner {
+  pid: number;
+  nonce: string;
+}
+
+interface SwitchLockRecord extends SwitchLockOwner {
+  source: TeleBoxVersion;
+  target: TeleBoxVersion;
+  reason?: string;
+  startedAt: number;
+}
+
+function readSwitchLock(home = DEFAULT_SWITCH_HOME): SwitchLockRecord | null {
+  try {
+    const raw = JSON.parse(
+      fs.readFileSync(switchInProgressLock(home), "utf8"),
+    ) as Partial<SwitchLockRecord>;
+    if (
+      typeof raw.pid !== "number" ||
+      !Number.isInteger(raw.pid) ||
+      raw.pid <= 0 ||
+      typeof raw.nonce !== "string" ||
+      raw.nonce.length < 16 ||
+      (raw.source !== "teleproto" && raw.source !== "mtcute") ||
+      (raw.target !== "teleproto" && raw.target !== "mtcute") ||
+      typeof raw.startedAt !== "number"
+    ) {
+      return null;
+    }
+    return raw as SwitchLockRecord;
+  } catch {
+    return null;
+  }
+}
+
+function writeLockRecord(fd: number, record: SwitchLockRecord): void {
+  fs.writeFileSync(fd, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  fs.fsyncSync(fd);
+}
+
+function sameOwner(
+  record: SwitchLockRecord | null,
+  owner: SwitchLockOwner,
+): record is SwitchLockRecord {
+  return record?.pid === owner.pid && record.nonce === owner.nonce;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+export function clearStaleSwitchInProgress(
+  home = DEFAULT_SWITCH_HOME,
+): boolean {
+  const owner = readSwitchLock(home);
+  if (!owner || isPidAlive(owner.pid)) return false;
+  return clearSwitchInProgress(owner, home);
+}
+
 export function markSwitchInProgress(
   meta: { source: TeleBoxVersion; target: TeleBoxVersion; reason?: string },
   home = DEFAULT_SWITCH_HOME,
-): void {
+): SwitchLockOwner {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(
-    switchInProgressLock(home),
-    JSON.stringify(
-      {
-        ...meta,
-        pid: process.pid,
-        startedAt: Date.now(),
-      },
-      null,
-      2,
-    ),
-    { mode: 0o600 },
-  );
+  const owner = {
+    pid: process.pid,
+    nonce: crypto.randomBytes(18).toString("hex"),
+  };
+  const lockPath = switchInProgressLock(home);
+  let fd: number;
+  try {
+    fd = fs.openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code !== "EEXIST" ||
+      !clearStaleSwitchInProgress(home)
+    ) {
+      throw error;
+    }
+    fd = fs.openSync(lockPath, "wx", 0o600);
+  }
+  try {
+    writeLockRecord(fd, {
+      ...meta,
+      ...owner,
+      startedAt: Date.now(),
+    });
+  } catch (error) {
+    try {
+      fs.closeSync(fd);
+    } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(switchInProgressLock(home));
+    } catch { /* ignore */ }
+    throw error;
+  }
+  fs.closeSync(fd);
+  return owner;
 }
 
-export function clearSwitchInProgress(home = DEFAULT_SWITCH_HOME): void {
+/** Transfer the plugin's reservation lock to the detached controller process. */
+export function claimSwitchInProgress(
+  previousOwner: SwitchLockOwner,
+  meta: { source: TeleBoxVersion; target: TeleBoxVersion; reason?: string },
+  home = DEFAULT_SWITCH_HOME,
+): SwitchLockOwner {
+  const current = readSwitchLock(home);
+  if (!sameOwner(current, previousOwner)) {
+    throw new Error("版本切换锁所有者已变化，拒绝接管");
+  }
+
+  const nextOwner = { pid: process.pid, nonce: previousOwner.nonce };
+  const lock = switchInProgressLock(home);
+  const tmp = `${lock}.${process.pid}.${previousOwner.nonce}.tmp`;
+  const fd = fs.openSync(tmp, "wx", 0o600);
+  try {
+    writeLockRecord(fd, {
+      ...meta,
+      ...nextOwner,
+      startedAt: current.startedAt,
+    });
+    fs.closeSync(fd);
+    const beforeReplace = readSwitchLock(home);
+    if (!sameOwner(beforeReplace, previousOwner)) {
+      throw new Error("版本切换锁在接管期间发生变化");
+    }
+    fs.renameSync(tmp, lock);
+    return nextOwner;
+  } catch (error) {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    throw error;
+  }
+}
+
+export function clearSwitchInProgress(
+  owner: SwitchLockOwner,
+  home = DEFAULT_SWITCH_HOME,
+): boolean {
   try {
     const file = switchInProgressLock(home);
-    if (fs.existsSync(file)) fs.unlinkSync(file);
+    const current = readSwitchLock(home);
+    if (!sameOwner(current, owner)) return false;
+    fs.unlinkSync(file);
+    return true;
   } catch {
-    /* ignore */
+    return false;
   }
 }
 
 /**
  * True while `.switch go` is running.
  * Used by Memory Monitor to avoid killing the bot mid-switch (progress would freeze).
- * Stale locks older than 40 minutes are ignored.
+ * Authenticated locks whose owner PID is dead are removed before checking the
+ * progress snapshot; live owners always win regardless of age.
  */
 export function isSwitchInProgress(home = DEFAULT_SWITCH_HOME): boolean {
   try {
     const lock = switchInProgressLock(home);
     if (fs.existsSync(lock)) {
-      const st = fs.statSync(lock);
-      if (Date.now() - st.mtimeMs < 40 * 60 * 1000) return true;
-      // stale
-      try { fs.unlinkSync(lock); } catch { /* ignore */ }
+      const owner = readSwitchLock(home);
+      if (owner && isPidAlive(owner.pid)) return true;
+      if (owner && clearStaleSwitchInProgress(home)) {
+        // Continue to the progress snapshot check below.
+      } else if (owner) {
+        return true;
+      }
+      // An invalid stale file is intentionally left in place. Removing a lock
+      // whose owner cannot be authenticated would defeat ownership checks.
+      if (!owner) return true;
     }
     const snap = readProgressSnapshot(home);
     if (snap && !snap.done && !snap.failed) {
@@ -277,7 +411,6 @@ export class SwitchProgressReporter {
   async fail(message: string): Promise<void> {
     this.failed = true;
     this.finished = true;
-    clearSwitchInProgress();
     const running = this.steps.find((s) => s.status === "running");
     if (running) {
       running.status = "fail";
@@ -291,7 +424,6 @@ export class SwitchProgressReporter {
       if (s.status === "running" || s.status === "pending") s.status = "done";
     }
     this.finished = true;
-    clearSwitchInProgress();
     this.flush(
       extra ?? "目标版本正在启动，完成后本条消息会显示最终结果。",
     );

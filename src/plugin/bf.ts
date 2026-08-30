@@ -14,6 +14,12 @@ import { getPrefixes } from "@utils/pluginManager";
 import type { GenerationContext } from "@utils/generationContext";
 import { tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import { htmlEscape } from "@utils/htmlEscape";
+import {
+  extractBackupArchive,
+  reloadRestoredBackupOrRollback,
+  restoreBackupFromStaging,
+} from "@utils/backupRestore";
+import { reloadAndFinalize } from "@utils/postReloadMessage";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -246,74 +252,6 @@ function copyDirRecursive(src: string, dest: string): void {
       fs.copyFileSync(srcPath, destPath);
     }
   }
-}
-
-// 解压备份文件
-async function extractBackup(archivePath: string, lifecycle: GenerationContext): Promise<string> {
-  const extractDir = path.join(os.tmpdir(), `extract_${Date.now()}`);
-  fs.mkdirSync(extractDir, { recursive: true });
-
-  await lifecycle.runTask(
-    async () =>
-      await new Promise<void>((resolve, reject) => {
-        const tar = trackChildProcess(
-          spawn("tar", ["-xzf", archivePath, "-C", extractDir]),
-          lifecycle,
-          "bf:extract-tar"
-        );
-
-        tar.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`tar exited with code ${code}`));
-        });
-
-        tar.on("error", reject);
-        throwIfAborted(lifecycle);
-      }),
-    { label: "bf:extract-tar" }
-  );
-
-  return extractDir;
-}
-
-// 恢复备份
-async function restoreBackup(extractPath: string): Promise<void> {
-  const programDir = process.cwd();
-  const backupRoot = path.join(extractPath, "telebox_backup");
-
-  if (!fs.existsSync(backupRoot)) {
-    throw new Error("无效的备份文件格式");
-  }
-
-  // 创建当前状态备份
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
-  const currentBackupDir = path.join(
-    programDir,
-    `_restore_backup_${timestamp}`
-  );
-  fs.mkdirSync(currentBackupDir, { recursive: true });
-
-  // 恢复 plugins 和 assets
-  const dirs = ["plugins", "assets"];
-
-  for (const dir of dirs) {
-    const currentPath = path.join(programDir, dir);
-    const backupPath = path.join(backupRoot, dir);
-    const savePath = path.join(currentBackupDir, dir);
-
-    // 备份当前目录
-    if (fs.existsSync(currentPath)) {
-      copyDirRecursive(currentPath, savePath);
-      fs.rmSync(currentPath, { recursive: true, force: true });
-    }
-
-    // 恢复备份
-    if (fs.existsSync(backupPath)) {
-      copyDirRecursive(backupPath, currentPath);
-    }
-  }
-
-  console.log(`恢复完成，原文件备份在: ${currentBackupDir}`);
 }
 
 const help_text = `<code>${mainPrefix}bf</code> 备份 plugins + assets 目录
@@ -665,6 +603,8 @@ class BfPlugin extends Plugin {
       }
 
       const client = await getGlobalClient();
+      let tempPath: string | null = null;
+      let extractPath: string | null = null;
 
       try {
         // 获取回复的消息
@@ -684,60 +624,53 @@ class BfPlugin extends Plugin {
         await msg.edit({ text: "📥 正在下载备份...", parseMode: "html" });
 
         // 下载文件
-        const tempPath = path.join(os.tmpdir(), `restore_${Date.now()}.tar.gz`);
+        tempPath = path.join(
+          os.tmpdir(),
+          `restore_${process.pid}_${crypto.randomBytes(8).toString("hex")}.tar.gz`,
+        );
         const buffer = await client.downloadMedia(backupMsg);
 
         if (!buffer) {
           throw new Error("下载失败");
         }
 
-        fs.writeFileSync(tempPath, buffer);
+        fs.writeFileSync(tempPath, buffer, { flag: "wx", mode: 0o600 });
 
         await msg.edit({ text: "📦 正在解压备份...", parseMode: "html" });
 
         // 解压文件
-        const extractPath = await extractBackup(tempPath, lifecycle);
+        extractPath = await extractBackupArchive(tempPath, lifecycle);
 
         await msg.edit({ text: "🔄 正在恢复备份...", parseMode: "html" });
 
         // 恢复备份
-        await restoreBackup(extractPath);
+        const restoreResult = restoreBackupFromStaging(extractPath);
+        console.log(`恢复完成，原文件备份在: ${restoreResult.previousFilesDir}`);
 
-        // 清理临时文件
-        try {
-          fs.unlinkSync(tempPath);
-          fs.rmSync(extractPath, { recursive: true, force: true });
-        } catch (cleanupErr) {
-          console.warn(`[bf] 恢复后: ${String(cleanupErr)}`);
-        }
-
-        // 尝试重载插件
-        try {
-          const pluginManager = require("@utils/pluginManager");
-          if (pluginManager.loadPlugins) {
-            await msg.edit({
-              text: "✅ 恢复完成并已重载插件",
-              parseMode: "html",
-            });
-            await pluginManager.loadPlugins();
-          } else {
-            await msg.edit({
-              text: "✅ 恢复完成，请重启程序",
-              parseMode: "html",
-            });
-          }
-        } catch (reloadErr) {
-          console.error("Failed to reload plugins after restore:", reloadErr);
-          await msg.edit({
-            text: "✅ 恢复完成，请重启程序",
-            parseMode: "html",
-          });
-        }
+        const pluginManager = require("@utils/pluginManager") as typeof import("@utils/pluginManager");
+        await reloadAndFinalize(msg, "✅ 恢复完成并已重载插件", {
+          parseMode: "html",
+          failureText: "❌ 备份中的插件加载失败，已恢复操作前的 plugins/assets",
+          reload: async () =>
+            await reloadRestoredBackupOrRollback(
+              restoreResult,
+              async () => await pluginManager.loadPlugins(),
+            ),
+        });
       } catch (error) {
         await msg.edit({
           text: `❌ 恢复失败: ${String(error)}`,
           parseMode: "html",
         });
+      } finally {
+        try {
+          if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          if (extractPath && fs.existsSync(extractPath)) {
+            fs.rmSync(extractPath, { recursive: true, force: true });
+          }
+        } catch (cleanupErr) {
+          console.warn(`[bf] 恢复后清理失败: ${String(cleanupErr)}`);
+        }
       }
     },
   };

@@ -26,6 +26,7 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import crypto from "crypto";
 import type { TeleBoxVersion } from "./versionSwitchCore";
 import { DEFAULT_SWITCH_HOME } from "./versionSwitchState";
 
@@ -101,12 +102,6 @@ const MTCUTE_CLONE_URL = "https://github.com/TeleBoxOrg/TeleBox-Next.git";
 const PATH_CACHE_FILE = path.join(DEFAULT_SWITCH_HOME, "paths.json");
 const PLUGIN_REPOS_DIR = path.join(DEFAULT_SWITCH_HOME, "plugin-repos");
 
-/** Names that must stay at runtime home during flat→nested move. */
-const HOME_RESERVED = new Set([
-  PEER_DIR_NAME.teleproto,
-  PEER_DIR_NAME.mtcute,
-]);
-
 interface PathCache {
   runtimeHome?: string;
   teleproto?: string;
@@ -127,6 +122,8 @@ export interface EditionLayout {
   pendingNest: PathCache["pendingNest"] | null;
   /** true = sibling dirs (flat), false = nested under home. */
   flat: boolean;
+  /** Directory moves performed by an explicit layout conversion. */
+  moveJournal?: LayoutMoveJournal;
 }
 
 /** Backward-compat alias. */
@@ -205,6 +202,12 @@ function packageDeps(repo: string): Record<string, string> {
 
 /** Detect edition by package.json deps + run-tsx. */
 export function detectEdition(repo: string): TeleBoxVersion | null {
+  try {
+    const stat = fs.lstatSync(repo);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return null;
+  } catch {
+    return null;
+  }
   if (!fs.existsSync(path.join(repo, "package.json"))) return null;
   if (!fs.existsSync(path.join(repo, "scripts", "run-tsx.cjs"))) return null;
   const deps = packageDeps(repo);
@@ -219,7 +222,8 @@ export function detectEdition(repo: string): TeleBoxVersion | null {
 
 function isValidRepo(repo: string, version: TeleBoxVersion): boolean {
   try {
-    if (!fs.existsSync(repo) || !fs.statSync(repo).isDirectory()) return false;
+    const stat = fs.lstatSync(repo);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
   } catch {
     return false;
   }
@@ -316,9 +320,7 @@ export function resolveRuntimeHome(): string {
       const base = path.basename(cache.runtimeHome);
       if (isFlatDirName(base, homeEdition)) {
         // Flat install — home should be parent, not the repo itself
-        const parent = path.dirname(cache.runtimeHome);
-        savePathCache({ runtimeHome: parent });
-        return parent;
+        return path.dirname(cache.runtimeHome);
       }
       // Not a recognized flat name — keep as-is (could be a custom dir)
       return cache.runtimeHome;
@@ -338,14 +340,10 @@ export function resolveRuntimeHome(): string {
     const base = path.basename(current);
     if (isEditionSubdirName(base)) {
       // Nested layout: home is parent
-      const home = path.dirname(current);
-      savePathCache({ runtimeHome: home });
-      return home;
+      return path.dirname(current);
     }
     // Flat install: home is parent (so both siblings are under it)
-    const home = path.dirname(current);
-    savePathCache({ runtimeHome: home });
-    return home;
+    return path.dirname(current);
   }
 
   for (const cwd of listPm2Cwds()) {
@@ -353,14 +351,10 @@ export function resolveRuntimeHome(): string {
     if (!edition) continue;
     const base = path.basename(cwd);
     if (isEditionSubdirName(base)) {
-      const home = path.dirname(cwd);
-      savePathCache({ runtimeHome: home });
-      return home;
+      return path.dirname(cwd);
     }
     // Flat install: home is parent
-    const home = path.dirname(cwd);
-    savePathCache({ runtimeHome: home });
-    return home;
+    return path.dirname(cwd);
   }
 
   throw new Error("无法定位 TeleBox 运行时目录（runtime home）");
@@ -397,18 +391,34 @@ function ensureNpmInstall(repo: string, label: string): void {
   if (!fs.existsSync(pkg)) {
     throw new Error(`缺少 package.json: ${repo}`);
   }
+  const nodeBin = process.execPath;
+  const npmCli = path.join(path.dirname(nodeBin), "npm");
+  const assertNoPendingScripts = (): void => {
+    const pendingScripts = listPendingInstallScripts(repo, npmCli, {
+      ...process.env,
+      NODE: nodeBin,
+    });
+    if (pendingScripts.length > 0) {
+      throw new Error(
+        `依赖安装脚本尚未获批准: ${pendingScripts.join(", ")}\n` +
+          `请先审核后执行：cd ${JSON.stringify(repo)} && npm approve-scripts ${pendingScripts.join(" ")} && npm rebuild\n` +
+          `完成后重新运行 .switch go。`,
+      );
+    }
+  };
   const nodeModules = path.join(repo, "node_modules");
   // Placeholder node_modules (e.g. only .gitkeep) blocks install — remove it
   if (fs.existsSync(nodeModules) && !hasUsableNodeModules(repo)) {
     console.log(`[versionSwitch] 清理无效 node_modules (${label})`);
     fs.rmSync(nodeModules, { recursive: true, force: true });
   }
-  if (hasUsableNodeModules(repo)) return;
+  if (hasUsableNodeModules(repo)) {
+    assertNoPendingScripts();
+    return;
+  }
   console.log(`[versionSwitch] npm install (${label})…`);
   
   // Respect mise/node version manager by using project's node via npm exec / npx from repo
-  const nodeBin = process.execPath;
-  const npmCli = path.join(path.dirname(nodeBin), "npm");
   const install = spawnSync(npmCli, ["install"], {
     cwd: repo,
     stdio: "inherit",
@@ -423,24 +433,211 @@ function ensureNpmInstall(repo: string, label: string): void {
     throw new Error(`npm install 失败: ${repo}`);
   }
   
-  // npm 11+ require approve-scripts for native build packages
-  console.log(`[versionSwitch] npm approve-scripts (${label})…`);
-  const approve = spawnSync(npmCli, ["approve-scripts", "--allow-scripts-pending"], {
-    cwd: repo,
-    stdio: "inherit",
-    timeout: 60_000,
-    env: {
-      ...process.env,
-      NODE: nodeBin,
-    },
-  });
-  if (approve.status !== 0) {
-    console.warn(`[versionSwitch] npm approve-scripts 返回非零码 (${approve.status}): ${repo} — 继续尝试`);
-  }
+  assertNoPendingScripts();
   
   if (!hasUsableNodeModules(repo)) {
     throw new Error(`npm install 后仍无可用依赖: ${repo}`);
   }
+}
+
+export function listPendingInstallScripts(
+  repo: string,
+  npmCli = path.join(path.dirname(process.execPath), "npm"),
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const result = spawnSync(
+    npmCli,
+    ["approve-scripts", "--allow-scripts-pending", "--json"],
+    {
+      cwd: repo,
+      encoding: "utf8",
+      timeout: 60_000,
+      env,
+    },
+  );
+  if (result.status !== 0 || result.error) {
+    throw new Error(
+      `无法只读检查 npm install scripts 状态: ${
+        result.error?.message ?? (result.stderr.trim() || `exit ${result.status}`)
+      }`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout || "{}");
+  } catch {
+    throw new Error("npm approve-scripts 未返回可解析的 JSON，拒绝假定依赖已批准");
+  }
+  const entries = (parsed as { allowScripts?: unknown }).allowScripts;
+  if (entries == null) return [];
+  if (!Array.isArray(entries)) {
+    throw new Error("npm approve-scripts JSON 缺少有效 allowScripts 数组");
+  }
+  return entries.map((entry) => {
+    const name = (entry as { name?: unknown })?.name;
+    if (typeof name !== "string" || !name.trim()) {
+      throw new Error("npm approve-scripts 返回了无效的依赖名称");
+    }
+    return name.trim();
+  });
+}
+
+export interface LayoutMoveEntry {
+  version: TeleBoxVersion;
+  from: string;
+  to: string;
+  origin: string;
+  head: string;
+  dirty: boolean;
+  statusHash: string;
+  state: "planned" | "moved" | "restored";
+}
+
+export interface LayoutMoveJournal {
+  id: string;
+  createdAt: number;
+  committed: boolean;
+  moves: LayoutMoveEntry[];
+}
+
+function gitText(repo: string, args: string[]): string {
+  const result = spawnSync("git", ["-C", repo, ...args], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (result.status !== 0) {
+    throw new Error(`Git 校验失败: ${repo} (${args.join(" ")})`);
+  }
+  return result.stdout.trim();
+}
+
+function normalizeGithubRemote(remote: string): string {
+  return remote
+    .trim()
+    .replace(/^git@github\.com:/i, "https://github.com/")
+    .replace(/^ssh:\/\/git@github\.com\//i, "https://github.com/")
+    .replace(/\.git\/?$/i, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
+}
+
+function expectedRemote(version: TeleBoxVersion): string {
+  return normalizeGithubRemote(
+    version === "teleproto" ? TELEPROTO_CLONE_URL : MTCUTE_CLONE_URL,
+  );
+}
+
+function inspectRepoForMove(repo: string, version: TeleBoxVersion): {
+  origin: string;
+  head: string;
+  dirty: boolean;
+  statusHash: string;
+} {
+  if (!isValidRepo(repo, version)) {
+    throw new Error(`拒绝移动：${repo} 不是有效的 ${version} 仓库`);
+  }
+  const top = fs.realpathSync(gitText(repo, ["rev-parse", "--show-toplevel"]));
+  if (top !== fs.realpathSync(repo)) {
+    throw new Error(`拒绝移动：Git 根目录不匹配 ${repo} (${top})`);
+  }
+
+  const remotes = gitText(repo, ["remote", "-v"])
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/)[1])
+    .filter((value): value is string => Boolean(value));
+  const matchingRemote = remotes.find(
+    (remote) => normalizeGithubRemote(remote) === expectedRemote(version),
+  );
+  if (!matchingRemote) {
+    throw new Error(`拒绝移动：${repo} 未指向官方 ${version} Git 仓库`);
+  }
+
+  const status = gitText(repo, ["status", "--porcelain=v1", "--untracked-files=all"]);
+  return {
+    origin: matchingRemote,
+    head: gitText(repo, ["rev-parse", "HEAD"]),
+    dirty: status.length > 0,
+    statusHash: crypto.createHash("sha256").update(status).digest("hex"),
+  };
+}
+
+export function createLayoutMoveJournal(
+  _switchHome = DEFAULT_SWITCH_HOME,
+): LayoutMoveJournal {
+  // Process-local transaction only. A persisted journal without startup
+  // recovery is more dangerous than no journal because it suggests recovery
+  // exists when it does not.
+  const id = `${Date.now()}-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+  return {
+    id,
+    createdAt: Date.now(),
+    committed: false,
+    moves: [],
+  };
+}
+
+function removeEmptyDestinationForRollback(dest: string): void {
+  if (!fs.existsSync(dest)) return;
+  const stat = fs.lstatSync(dest);
+  if (stat.isDirectory() && fs.readdirSync(dest).length === 0) {
+    fs.rmdirSync(dest);
+    return;
+  }
+  throw new Error(`布局回滚目标已被占用，拒绝覆盖: ${dest}`);
+}
+
+function journaledRepoRename(
+  journal: LayoutMoveJournal,
+  version: TeleBoxVersion,
+  from: string,
+  to: string,
+): void {
+  const source = path.resolve(from);
+  const destination = path.resolve(to);
+  if (source === destination) return;
+  if (fs.existsSync(destination)) {
+    throw new Error(`拒绝替换已存在目录: ${destination}`);
+  }
+  const identity = inspectRepoForMove(source, version);
+  const sourceDev = fs.statSync(source).dev;
+  const targetDev = fs.statSync(path.dirname(destination)).dev;
+  if (sourceDev !== targetDev) {
+    throw new Error(`拒绝跨文件系统移动（无法原子 rename）: ${source} → ${destination}`);
+  }
+
+  const entry: LayoutMoveEntry = {
+    version,
+    from: source,
+    to: destination,
+    ...identity,
+    state: "planned",
+  };
+  journal.moves.push(entry);
+  fs.renameSync(source, destination);
+  entry.state = "moved";
+}
+
+export function rollbackLayoutMoveJournal(journal: LayoutMoveJournal): void {
+  for (const entry of [...journal.moves].reverse()) {
+    if (entry.state !== "moved") continue;
+    if (!fs.existsSync(entry.to)) {
+      throw new Error(`布局回滚源不存在: ${entry.to}`);
+    }
+    const current = inspectRepoForMove(entry.to, entry.version);
+    if (
+      current.head !== entry.head ||
+      normalizeGithubRemote(current.origin) !== normalizeGithubRemote(entry.origin)
+    ) {
+      throw new Error(`布局回滚 Git 身份已变化，拒绝覆盖: ${entry.to}`);
+    }
+    removeEmptyDestinationForRollback(entry.from);
+    fs.renameSync(entry.to, entry.from);
+    entry.state = "restored";
+  }
+}
+
+export function commitLayoutMoveJournal(journal: LayoutMoveJournal): void {
+  journal.committed = true;
 }
 
 /**
@@ -448,60 +645,82 @@ function ensureNpmInstall(repo: string, label: string): void {
  * Must run only when no process is using the flat root as cwd (after pm2 stop).
  * For flat layout, this is never called (pendingNest is null).
  */
+export interface LayoutMoveResult {
+  root: string;
+  journal: LayoutMoveJournal;
+}
+
 export function completePendingNest(
   pending: NonNullable<PathCache["pendingNest"]>,
   home: string,
-): string {
+  journal = createLayoutMoveJournal(),
+): LayoutMoveResult {
   const dest = path.join(home, PEER_DIR_NAME[pending.version]);
   if (isValidRepo(dest, pending.version)) {
-    savePathCache({
-      [pending.version]: dest,
-      pendingNest: null,
-    });
-    return dest;
+    if (path.resolve(pending.from) !== path.resolve(dest)) {
+      throw new Error(`拒绝覆盖已有 ${pending.version} 仓库: ${dest}`);
+    }
+    return { root: dest, journal };
   }
 
   console.log(
     `[versionSwitch] 整理目录：把当前 ${pending.version} 移入 ${PEER_DIR_NAME[pending.version]}`,
   );
-  fs.mkdirSync(dest, { recursive: true });
 
   const from = path.resolve(pending.from);
   if (path.resolve(from) !== path.resolve(home)) {
-    // Unexpected — copy/move from explicit path if different
-    if (isValidRepo(from, pending.version) && from !== dest) {
-      // rare: already elsewhere
-      savePathCache({ [pending.version]: from, pendingNest: null });
-      return from;
+    try {
+      journaledRepoRename(journal, pending.version, from, dest);
+      savePathCache({
+        runtimeHome: home,
+        [pending.version]: dest,
+        pendingNest: null,
+      });
+      return { root: dest, journal };
+    } catch (error) {
+      rollbackLayoutMoveJournal(journal);
+      throw error;
     }
   }
 
-  const entries = fs.readdirSync(home);
-  for (const name of entries) {
-    if (HOME_RESERVED.has(name)) continue;
-    if (name === PEER_DIR_NAME[pending.version]) continue;
-    const srcPath = path.join(home, name);
-    const destPath = path.join(dest, name);
-    if (fs.existsSync(destPath)) {
-      // already moved partially
-      continue;
+  inspectRepoForMove(home, pending.version);
+  const parent = path.dirname(home);
+  const peerVersion: TeleBoxVersion = pending.version === "teleproto" ? "mtcute" : "teleproto";
+  const peerRoot = findNestedEdition(home, peerVersion);
+  const token = `${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+  const sourceStage = path.join(parent, `.telebox-layout-source-${token}`);
+  const peerStage = peerRoot
+    ? path.join(parent, `.telebox-layout-peer-${token}`)
+    : null;
+
+  try {
+    if (peerRoot && peerStage) {
+      journaledRepoRename(journal, peerVersion, peerRoot, peerStage);
     }
-    fs.renameSync(srcPath, destPath);
-  }
+    journaledRepoRename(journal, pending.version, home, sourceStage);
+    fs.mkdirSync(home, { mode: 0o700 });
+    journaledRepoRename(journal, pending.version, sourceStage, dest);
+    if (peerRoot && peerStage) {
+      journaledRepoRename(journal, peerVersion, peerStage, peerRoot);
+    }
 
-  if (!isValidRepo(dest, pending.version)) {
-    throw new Error(
-      `整理目录失败，${dest} 不是有效的 ${pending.version} 仓库`,
-    );
+    if (!isValidRepo(dest, pending.version)) {
+      throw new Error(
+        `整理目录失败，${dest} 不是有效的 ${pending.version} 仓库`,
+      );
+    }
+    savePathCache({
+      runtimeHome: home,
+      [pending.version]: dest,
+      ...(peerRoot ? { [peerVersion]: peerRoot } : {}),
+      pendingNest: null,
+    });
+    console.log(`[versionSwitch] ${pending.version} → ${dest}`);
+    return { root: dest, journal };
+  } catch (error) {
+    rollbackLayoutMoveJournal(journal);
+    throw error;
   }
-
-  savePathCache({
-    runtimeHome: home,
-    [pending.version]: dest,
-    pendingNest: null,
-  });
-  console.log(`[versionSwitch] ${pending.version} → ${dest}`);
-  return dest;
 }
 
 /**
@@ -512,7 +731,11 @@ export function completePendingNest(
  *      → ~/telebox-classic + ~/telebox-next (or ~/telebox + ~/telebox-next)
  * Must run when no process is using the nested dirs as cwd (after pm2 stop).
  */
-export function convertNestedToFlat(home: string): EditionLayout {
+export function convertNestedToFlat(
+  home: string,
+  journal = createLayoutMoveJournal(),
+  options: { persistCache?: boolean } = {},
+): EditionLayout {
   const cache = loadPathCache();
   const parent = path.dirname(home);
   
@@ -532,75 +755,58 @@ export function convertNestedToFlat(home: string): EditionLayout {
     mtcute: "",
   };
 
-  // Move teleproto edition up
-  if (nestedTele && isValidRepo(nestedTele, "teleproto")) {
-    // Pick a flat dest that doesn't conflict with the home directory itself
-    let flatDest = path.join(parent, FLAT_DIR_NAMES.teleproto[0]); // "telebox"
-    if (flatDest === home && FLAT_DIR_NAMES.teleproto.length > 1) {
-      flatDest = path.join(parent, FLAT_DIR_NAMES.teleproto[1]); // "telebox-classic"
-    }
-    if (nestedTele !== flatDest) {
-      console.log(`[versionSwitch] 移动 teleproto: ${nestedTele} → ${flatDest}`);
-      if (fs.existsSync(flatDest)) {
-        // Flat target already exists — use it, remove stale nested copy
-        console.log(`[versionSwitch] 扁平目标已存在，使用它并清理嵌套副本: ${flatDest}`);
-        newRoots.teleproto = flatDest;
-        // Remove stale nested directory to avoid future confusion
-        try {
-          fs.rmSync(nestedTele, { recursive: true, force: true });
-          console.log(`[versionSwitch] 已清理嵌套副本: ${nestedTele}`);
-        } catch (e) {
-          console.log(`[versionSwitch] 清理嵌套副本失败 (非致命): ${nestedTele}`);
-        }
-      } else {
-        fs.renameSync(nestedTele, flatDest);
-        newRoots.teleproto = flatDest;
+  try {
+    // Move teleproto edition up
+    if (nestedTele && isValidRepo(nestedTele, "teleproto")) {
+      // Pick a flat dest that doesn't conflict with the home directory itself
+      let flatDest = path.join(parent, FLAT_DIR_NAMES.teleproto[0]); // "telebox"
+      if (flatDest === home && FLAT_DIR_NAMES.teleproto.length > 1) {
+        flatDest = path.join(parent, FLAT_DIR_NAMES.teleproto[1]); // "telebox-classic"
       }
-    } else {
-      newRoots.teleproto = nestedTele;
+      if (nestedTele !== flatDest) {
+        console.log(`[versionSwitch] 移动 teleproto: ${nestedTele} → ${flatDest}`);
+        journaledRepoRename(journal, "teleproto", nestedTele, flatDest);
+        newRoots.teleproto = flatDest;
+      } else {
+        newRoots.teleproto = nestedTele;
+      }
     }
-  }
 
-  // Move mtcute edition up
-  if (nestedMtcute && isValidRepo(nestedMtcute, "mtcute")) {
-    let flatDest = path.join(parent, FLAT_DIR_NAMES.mtcute[0]); // "telebox-next"
-    if (flatDest === home && FLAT_DIR_NAMES.mtcute.length > 1) {
-      flatDest = path.join(parent, FLAT_DIR_NAMES.mtcute[1]); // "telebox_mtcute"
-    }
-    if (nestedMtcute !== flatDest) {
-      console.log(`[versionSwitch] 移动 mtcute: ${nestedMtcute} → ${flatDest}`);
-      if (fs.existsSync(flatDest)) {
-        console.log(`[versionSwitch] 扁平目标已存在，使用它并清理嵌套副本: ${flatDest}`);
-        newRoots.mtcute = flatDest;
-        try {
-          fs.rmSync(nestedMtcute, { recursive: true, force: true });
-          console.log(`[versionSwitch] 已清理嵌套副本: ${nestedMtcute}`);
-        } catch (e) {
-          console.log(`[versionSwitch] 清理嵌套副本失败 (非致命): ${nestedMtcute}`);
-        }
-      } else {
-        fs.renameSync(nestedMtcute, flatDest);
-        newRoots.mtcute = flatDest;
+    // Move mtcute edition up
+    if (nestedMtcute && isValidRepo(nestedMtcute, "mtcute")) {
+      let flatDest = path.join(parent, FLAT_DIR_NAMES.mtcute[0]); // "telebox-next"
+      if (flatDest === home && FLAT_DIR_NAMES.mtcute.length > 1) {
+        flatDest = path.join(parent, FLAT_DIR_NAMES.mtcute[1]); // "telebox_mtcute"
       }
-    } else {
-      newRoots.mtcute = nestedMtcute;
+      if (nestedMtcute !== flatDest) {
+        console.log(`[versionSwitch] 移动 mtcute: ${nestedMtcute} → ${flatDest}`);
+        journaledRepoRename(journal, "mtcute", nestedMtcute, flatDest);
+        newRoots.mtcute = flatDest;
+      } else {
+        newRoots.mtcute = nestedMtcute;
+      }
     }
+  } catch (error) {
+    rollbackLayoutMoveJournal(journal);
+    throw error;
   }
 
   // If home directory is now empty (except maybe plugin-repos), we could remove it
   // but better to leave it to avoid breaking anything
 
   // Update cache with new flat paths
-  savePathCache({
-    runtimeHome: parent,
-    teleproto: newRoots.teleproto || path.join(parent, FLAT_DIR_NAMES.teleproto[0]),
-    mtcute: newRoots.mtcute || path.join(parent, FLAT_DIR_NAMES.mtcute[0]),
-    pendingNest: null,
-  });
+  if (options.persistCache !== false) {
+    savePathCache({
+      runtimeHome: parent,
+      teleproto: newRoots.teleproto || path.join(parent, FLAT_DIR_NAMES.teleproto[0]),
+      mtcute: newRoots.mtcute || path.join(parent, FLAT_DIR_NAMES.mtcute[0]),
+      pendingNest: null,
+    });
 
-  // Clear any stale pendingNest
-  if (cache.pendingNest) {
-    savePathCache({ pendingNest: null });
+    // Clear any stale pendingNest
+    if (cache.pendingNest) {
+      savePathCache({ pendingNest: null });
+    }
   }
 
   console.log(`[versionSwitch] 嵌套→扁平转换完成: teleproto=${newRoots.teleproto}, mtcute=${newRoots.mtcute}`);
@@ -613,6 +819,7 @@ export function convertNestedToFlat(home: string): EditionLayout {
     },
     pendingNest: null,
     flat: true,
+    moveJournal: journal,
   };
 }
 
@@ -635,6 +842,11 @@ export function ensureNestedLayout(
   const home = resolveRuntimeHome();
   const cache = loadPathCache();
   let pendingNest: PathCache["pendingNest"] | null = cache.pendingNest ?? null;
+  const cacheMatchesHome =
+    !cache.runtimeHome || path.resolve(cache.runtimeHome) === path.resolve(home);
+  if (pendingNest && !isValidRepo(pendingNest.from, pendingNest.version)) {
+    pendingNest = null;
+  }
 
   // ── Detect layout: flat (sibling dirs) vs nested (subdirs under home) ──
 
@@ -689,46 +901,34 @@ export function ensureNestedLayout(
     const latest = loadPathCache();
     if (flatTeleRoot && isValidRepo(flatTeleRoot, "teleproto")) {
       roots.teleproto = flatTeleRoot;
-    } else if (latest.teleproto && isValidRepo(latest.teleproto, "teleproto")) {
+    } else if (
+      cacheMatchesHome &&
+      latest.teleproto &&
+      isValidRepo(latest.teleproto, "teleproto")
+    ) {
       roots.teleproto = latest.teleproto;
     }
     if (flatMtcuteRoot && isValidRepo(flatMtcuteRoot, "mtcute")) {
       roots.mtcute = flatMtcuteRoot;
-    } else if (latest.mtcute && isValidRepo(latest.mtcute, "mtcute")) {
+    } else if (
+      cacheMatchesHome &&
+      latest.mtcute &&
+      isValidRepo(latest.mtcute, "mtcute")
+    ) {
       roots.mtcute = latest.mtcute;
     }
 
-    // Clear any stale pendingNest from a previous nested attempt
-    if (pendingNest) {
-      pendingNest = null;
-      savePathCache({ pendingNest: null });
-    }
+    // Discovery is read-only. A stale pending marker is ignored in memory,
+    // but is only persisted by an explicit prepare/move operation.
+    pendingNest = null;
 
-    savePathCache({
-      runtimeHome: home,
-      teleproto: roots.teleproto,
-      mtcute: roots.mtcute,
-    });
-
-    // Clean up stale nested directories when flat layout is active
-    // e.g. if /root/telebox (flat) is used, remove stale /root/telebox-classic (nested)
-    for (const version of ["teleproto", "mtcute"] as const) {
-      const nestedPath = path.join(home, PEER_DIR_NAME[version]);
-      const flatPath = roots[version];
-      if (
-        nestedPath !== flatPath &&
-        fs.existsSync(nestedPath) &&
-        isValidRepo(nestedPath, version)
-      ) {
-        console.log(
-          `[versionSwitch] 清理过时的嵌套目录: ${nestedPath} (扁平版已用 ${flatPath})`,
-        );
-        try {
-          fs.rmSync(nestedPath, { recursive: true, force: true });
-        } catch (e) {
-          console.log(`[versionSwitch] 清理失败 (非致命): ${nestedPath}`);
-        }
-      }
+    if (prepareMissing) {
+      savePathCache({
+        runtimeHome: home,
+        teleproto: roots.teleproto,
+        mtcute: roots.mtcute,
+        pendingNest: null,
+      });
     }
 
     // Prepare missing editions as flat siblings if requested
@@ -764,18 +964,24 @@ export function ensureNestedLayout(
   // Flat install still at home root — needs nesting after PM2 stop
   if (homeEdition && !teleReady && !mtcuteReady) {
     pendingNest = { version: homeEdition, from: home };
-    savePathCache({
-      runtimeHome: home,
-      pendingNest,
-      // temporary: use flat home as this edition until nest completes
-      [homeEdition]: home,
-    });
+    if (prepareMissing) {
+      savePathCache({
+        runtimeHome: home,
+        pendingNest,
+        // temporary: use flat home as this edition until nest completes
+        [homeEdition]: home,
+      });
+    }
   } else if (homeEdition && homeEdition === "teleproto" && !teleReady) {
     pendingNest = { version: "teleproto", from: home };
-    savePathCache({ runtimeHome: home, pendingNest, teleproto: home });
+    if (prepareMissing) {
+      savePathCache({ runtimeHome: home, pendingNest, teleproto: home });
+    }
   } else if (homeEdition && homeEdition === "mtcute" && !mtcuteReady) {
     pendingNest = { version: "mtcute", from: home };
-    savePathCache({ runtimeHome: home, pendingNest, mtcute: home });
+    if (prepareMissing) {
+      savePathCache({ runtimeHome: home, pendingNest, mtcute: home });
+    }
   }
 
   // Ensure both edition dirs exist (peer clone into home/telebox-xx)
@@ -791,7 +997,9 @@ export function ensureNestedLayout(
     }
 
     if (isValidRepo(dest, version)) {
-      savePathCache({ [version]: dest, runtimeHome: home });
+      if (prepareMissing) {
+        savePathCache({ [version]: dest, runtimeHome: home });
+      }
       continue;
     }
 
@@ -803,10 +1011,7 @@ export function ensureNestedLayout(
     }
 
     if (!prepareMissing) {
-      // Plugin path: never block the bot on git clone / npm install
-      if (isValidRepo(dest, version)) {
-        savePathCache({ [version]: dest, runtimeHome: home });
-      }
+      // Plugin path: discovery never clones, installs, writes cache, or removes.
       continue;
     }
 
@@ -841,35 +1046,44 @@ export function ensureNestedLayout(
 
   // Fix roots from cache if valid
   const latest = loadPathCache();
-  if (latest.teleproto && isValidRepo(latest.teleproto, "teleproto")) {
+  if (
+    cacheMatchesHome &&
+    latest.teleproto &&
+    isValidRepo(latest.teleproto, "teleproto")
+  ) {
     roots.teleproto = latest.teleproto;
   }
-  if (latest.mtcute && isValidRepo(latest.mtcute, "mtcute")) {
+  if (
+    cacheMatchesHome &&
+    latest.mtcute &&
+    isValidRepo(latest.mtcute, "mtcute")
+  ) {
     roots.mtcute = latest.mtcute;
   }
 
-  // Validate peer exists for switch target
-  for (const version of ["teleproto", "mtcute"] as const) {
-    if (!isValidRepo(roots[version], version)) {
-      // try force prepare nested (non-pending)
-      if (!(pendingNest?.version === version && roots[version] === home)) {
-        const dest = path.join(home, PEER_DIR_NAME[version]);
-        cloneEdition(version, dest);
-        ensureNpmInstall(dest, PEER_DIR_NAME[version]);
-        if (isValidRepo(dest, version)) {
-          roots[version] = dest;
-          savePathCache({ [version]: dest, runtimeHome: home });
+  // Validate/prepare peers only when explicitly requested. Discovery must be read-only.
+  if (prepareMissing) {
+    for (const version of ["teleproto", "mtcute"] as const) {
+      if (!isValidRepo(roots[version], version)) {
+        if (!(pendingNest?.version === version && roots[version] === home)) {
+          const dest = path.join(home, PEER_DIR_NAME[version]);
+          cloneEdition(version, dest);
+          ensureNpmInstall(dest, PEER_DIR_NAME[version]);
+          if (isValidRepo(dest, version)) {
+            roots[version] = dest;
+            savePathCache({ [version]: dest, runtimeHome: home });
+          }
         }
       }
     }
-  }
 
-  savePathCache({
-    runtimeHome: home,
-    teleproto: roots.teleproto,
-    mtcute: roots.mtcute,
-    ...(pendingNest ? { pendingNest } : {}),
-  });
+    savePathCache({
+      runtimeHome: home,
+      teleproto: roots.teleproto,
+      mtcute: roots.mtcute,
+      ...(pendingNest ? { pendingNest } : {}),
+    });
+  }
 
   return { home, roots, pendingNest, flat: false };
 }
@@ -966,8 +1180,11 @@ export function prepareEdition(version: TeleBoxVersion): string {
     const hasPkg = fs.existsSync(path.join(dest, "package.json"));
     const hasGit = fs.existsSync(path.join(dest, ".git"));
     if (!hasPkg) {
-      console.log(`[versionSwitch] 删除不完整目录 ${dest}`);
-      fs.rmSync(dest, { recursive: true, force: true });
+      if (fs.readdirSync(dest).length === 0) {
+        fs.rmdirSync(dest);
+      } else {
+        throw new Error(`目标目录非空且不是有效仓库，拒绝删除: ${dest}`);
+      }
     } else if (hasGit && !hasUsableNodeModules(dest)) {
       ensureNpmInstall(dest, destLabel);
       if (isRunnableRepo(dest, version)) {
@@ -1080,6 +1297,27 @@ export interface SpawnTsxOptions {
   detached?: boolean;
 }
 
+export function resolveSetsidBinary(
+  candidates: string[] = ["/usr/bin/setsid", "/bin/setsid"],
+): string {
+  const binary = candidates.find((candidate) => {
+    try {
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile()) return false;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!binary) {
+    throw new Error(
+      "无法启动版本切换：系统缺少 setsid，controller 无法脱离 PM2 kill tree；源版本保持运行。",
+    );
+  }
+  return binary;
+}
+
 export function spawnTsxSync(
   repoRoot: string,
   script: string,
@@ -1125,27 +1363,14 @@ export function spawnTsxDetached(
   const stdio = options.stdio ?? "ignore";
   const args = [cli, scriptPath];
 
-  const spawnNode = (): ChildProcess =>
-    spawn(node, args, {
-      cwd,
-      env,
-      stdio,
-      detached: true,
-    });
-
-  // setsid: new session → not in PM2 kill tree of the source bot
-  let child: ChildProcess;
-  if (fs.existsSync("/usr/bin/setsid") || fs.existsSync("/bin/setsid")) {
-    const setsidBin = fs.existsSync("/usr/bin/setsid") ? "/usr/bin/setsid" : "/bin/setsid";
-    child = spawn(setsidBin, [node, ...args], {
-      cwd,
-      env,
-      stdio,
-      detached: true,
-    });
-  } else {
-    child = spawnNode();
-  }
+  // setsid is mandatory: detached:true alone remains inside PM2's kill tree.
+  const setsidBin = resolveSetsidBinary();
+  const child = spawn(setsidBin, [node, ...args], {
+    cwd,
+    env,
+    stdio,
+    detached: true,
+  });
 
   child.on("error", (err: Error) => {
     console.error(

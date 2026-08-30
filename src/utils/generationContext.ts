@@ -36,6 +36,7 @@ export interface DrainResult {
 interface DisposableEntry {
   dispose: Disposable;
   label: string;
+  cleanup?: Promise<void>;
 }
 
 interface TaskEntry {
@@ -93,6 +94,8 @@ export class GenerationContext {
   readonly createdAt: number;
   private readonly abortController = new AbortController();
   private readonly disposables = new Set<DisposableEntry>();
+  private readonly lateDisposals = new Set<Promise<void>>();
+  private readonly lateDisposalErrors: unknown[] = [];
   private readonly tasks = new Set<TaskEntry>();
   private readonly currentTaskStorage = new AsyncLocalStorage<TaskEntry>();
   private lifecycleState: GenerationLifecycleState = "active";
@@ -147,27 +150,45 @@ export class GenerationContext {
 
   // ── 资源追踪 ──
 
+  private runDisposable(entry: DisposableEntry): Promise<void> {
+    if (!entry.cleanup) {
+      entry.cleanup = (async () => {
+        await entry.dispose();
+      })();
+    }
+    return entry.cleanup;
+  }
+
+  private disposeImmediately(entry: DisposableEntry): Promise<void> {
+    const cleanup = this.runDisposable(entry);
+    const tracked = cleanup.catch((error) => {
+      this.lateDisposalErrors.push(error);
+      console.error(`[GEN ${this.generation}] Late disposable "${entry.label}" cleanup failed:`, error);
+    });
+    this.lateDisposals.add(tracked);
+    tracked
+      .finally(() => {
+        this.lateDisposals.delete(tracked);
+      })
+      .catch(() => undefined);
+    return cleanup;
+  }
+
   trackDisposable(dispose: Disposable, options?: TrackOptions): Disposable {
     const entry: DisposableEntry = {
       dispose,
       label: options?.label ?? "disposable",
     };
 
-    if (this.lifecycleState === "disposed") {
-      void Promise.resolve(dispose()).catch((error) => {
-        console.error(`[GEN ${this.generation}] Late disposable "${entry.label}" cleanup failed:`, error);
-      });
-      return dispose;
+    if (this.lifecycleState !== "active") {
+      const cleanup = this.disposeImmediately(entry);
+      return async () => await cleanup;
     }
 
     this.disposables.add(entry);
     return async () => {
-      if (!this.disposables.delete(entry)) return;
-      try {
-        await entry.dispose();
-      } catch (error) {
-        throw error;
-      }
+      this.disposables.delete(entry);
+      await this.runDisposable(entry);
     };
   }
 
@@ -327,7 +348,11 @@ export class GenerationContext {
   // ── Drain / Dispose ──
 
   async drain(timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<DrainResult> {
-    if (this.lifecycleState === "disposed") {
+    if (
+      this.lifecycleState === "disposed" &&
+      this.lateDisposals.size === 0 &&
+      this.lateDisposalErrors.length === 0
+    ) {
       return { completed: true, timedOut: false, errors: [], pendingTasks: 0, pendingDisposables: 0 };
     }
 
@@ -336,21 +361,32 @@ export class GenerationContext {
     }
     this.lifecycleState = "draining";
 
-    // 1. 执行所有 disposable
     const errors: unknown[] = [];
-    const disposableEntries = [...this.disposables];
-    this.disposables.clear();
+    const collectLateDisposalErrors = (): void => {
+      if (this.lateDisposalErrors.length > 0) {
+        errors.push(...this.lateDisposalErrors.splice(0));
+      }
+    };
+    const drainDisposablesUntilStable = async (): Promise<void> => {
+      while (true) {
+        const disposableEntries = [...this.disposables];
+        this.disposables.clear();
+        const late = [...this.lateDisposals];
+        if (disposableEntries.length === 0 && late.length === 0) return;
 
-    await Promise.all(
-      disposableEntries.map(async (entry) => {
-        try {
-          await entry.dispose();
-        } catch (error) {
-          errors.push(error);
-          console.error(`[GEN ${this.generation}] Disposable "${entry.label}" failed:`, error);
+        const results = await Promise.allSettled([
+          ...disposableEntries.map((entry) => this.runDisposable(entry)),
+          ...late,
+        ]);
+        for (const result of results) {
+          if (result.status === "rejected") errors.push(result.reason);
         }
-      })
-    );
+      }
+    };
+
+    // 1. Dispose resources present when drain begins.
+    await drainDisposablesUntilStable();
+    collectLateDisposalErrors();
 
     // 2. 等待所有 task 完成（排除当前 drain task 自身）
     const waitForTasks = async (): Promise<void> => {
@@ -365,6 +401,11 @@ export class GenerationContext {
     const taskWait = waitForTasks();
     const raceResult = await Promise.race([taskWait, createTimeoutPromise(timeoutMs)]);
     const timedOut = raceResult === "timeout";
+
+    // Tasks may register cleanup while observing abort or while settling. Sweep
+    // again and keep sweeping until no disposal can enqueue another one.
+    await drainDisposablesUntilStable();
+    collectLateDisposalErrors();
 
     if (!timedOut) {
       this.lifecycleState = "disposed";
@@ -384,7 +425,7 @@ export class GenerationContext {
       timedOut,
       errors,
       pendingTasks: pendingTaskCount,
-      pendingDisposables: this.disposables.size,
+      pendingDisposables: this.disposables.size + this.lateDisposals.size,
     };
   }
 
