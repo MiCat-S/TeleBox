@@ -175,7 +175,7 @@ abstract class Plugin {
 
 <div align="center">
 
-[![Plugin Repository](https://img.shields.io/badge/🔌_插件仓库-TeleBox--Plugins-blue?style=for-the-badge)](https://github.com/TeleBoxOrg/TeleBox-Plugins)
+[![Plugin Repository](https://img.shields.io/badge/🔌_插件仓库-TeleBox--Plugins-blue?style=for-the-badge)](https://github.com/MiCat-S/TeleBox-Plugins/tree/codex-reasoning-effort-source)
 
 </div>
 
@@ -225,7 +225,7 @@ npm run dev   # 开发模式，前缀改为 ! / ！
 | | |
 |:--:|:--:|
 | [![TeleBox](https://img.shields.io/badge/📦_TeleBox-blue?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox) | [![TeleBox-Next](https://img.shields.io/badge/📦_TeleBox--Next-blue?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox-Next) |
-| [![Plugins](https://img.shields.io/badge/🔌_TeleBox--Plugins-green?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox-Plugins) | [![Issues](https://img.shields.io/badge/🆘_Issues-red?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox/issues) |
+| [![Plugins](https://img.shields.io/badge/🔌_TeleBox--Plugins-green?style=for-the-badge&logo=github)](https://github.com/MiCat-S/TeleBox-Plugins/tree/codex-reasoning-effort-source) | [![Issues](https://img.shields.io/badge/🆘_Issues-red?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox/issues) |
 
 <div align="center">
 

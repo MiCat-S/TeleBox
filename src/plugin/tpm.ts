@@ -28,7 +28,9 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const MAX_MESSAGE_LENGTH = 4000;
 const PLUGINS_INDEX_URL =
-  "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/main/plugins.json";
+  "https://raw.githubusercontent.com/MiCat-S/TeleBox-Plugins/codex-reasoning-effort-source/plugins.json";
+const PLUGINS_REPOSITORY_URL =
+  "https://github.com/MiCat-S/TeleBox-Plugins/tree/codex-reasoning-effort-source";
 const CUSTOM_SOURCE_CONFIG_PATH = path.join(
   createDirectoryInAssets("tpm"),
   "source.json"
@@ -1512,7 +1514,7 @@ async function search(msg: Api.Message) {
       `• <code>${mainPrefix}tpm rm [名称]</code> 卸载\n` +
       `• <code>${mainPrefix}tpm rm all</code> 清空`;
 
-    const repoLink = `\n🔗 <b>插件仓库:</b> <a href="https://github.com/TeleBoxOrg/TeleBox-Plugins">TeleBox-Plugins</a>`;
+    const repoLink = `\n🔗 <b>插件仓库:</b> <a href="${PLUGINS_REPOSITORY_URL}">TeleBox-Plugins</a>`;
 
     const title = keyword ? `🔍 搜索 "${htmlEscape(keyword)}" 结果` : `🔍 远程插件列表`;
     const fullMessage = [
@@ -1645,7 +1647,7 @@ async function showPluginRecords(msg: Api.Message, verbose?: boolean) {
       "",
       `━━━━━━━━━━━━━━━━━`,
       `📊 总计: ${dbNames.length + notInDb.length} 个插件`,
-      "", `🔗 <b>插件仓库:</b> <a href="https://github.com/TeleBoxOrg/TeleBox-Plugins">TeleBox-Plugins</a>`,
+      "", `🔗 <b>插件仓库:</b> <a href="${PLUGINS_REPOSITORY_URL}">TeleBox-Plugins</a>`,
     ].join("\n");
     const fullMessage = messageParts.join("\n");
     
