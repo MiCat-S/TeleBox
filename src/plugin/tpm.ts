@@ -28,9 +28,9 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const MAX_MESSAGE_LENGTH = 4000;
 const PLUGINS_INDEX_URL =
-  "https://raw.githubusercontent.com/MiCat-S/TeleBox-Plugins/codex-reasoning-effort-source/plugins.json";
+  "https://raw.githubusercontent.com/MiCat-S/TeleBox-Plugins/main/plugins.json";
 const PLUGINS_REPOSITORY_URL =
-  "https://github.com/MiCat-S/TeleBox-Plugins/tree/codex-reasoning-effort-source";
+  "https://github.com/MiCat-S/TeleBox-Plugins";
 const CUSTOM_SOURCE_CONFIG_PATH = path.join(
   createDirectoryInAssets("tpm"),
   "source.json"
