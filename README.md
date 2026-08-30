@@ -13,7 +13,7 @@
 
 _TypeScript 全栈 · 插件热加载 · 一键扩展 · 可与 TeleBox-Next 无缝切换_
 
-[📖 快速开始](#-快速开始) · [🔌 插件生态](#-插件生态) · [🛠️ 开发指南](https://github.com/TeleBoxOrg/TeleBox/blob/main/TELEBOX_DEVELOPMENT.md) · [📋 安装](https://github.com/TeleBoxOrg/TeleBox/blob/main/INSTALL.md)
+[📖 快速开始](#-快速开始) · [🔌 插件生态](#-插件生态) · [🛠️ 开发指南](https://github.com/MiCat-S/TeleBox/blob/main/TELEBOX_DEVELOPMENT.md) · [📋 安装](https://github.com/MiCat-S/TeleBox/blob/main/INSTALL.md)
 
 </div>
 
@@ -117,7 +117,7 @@ abstract class Plugin {
 ```
 
 > 默认命令前缀：`.` `。` `$` · 开发模式（`npm run dev`）：`!` `！`  
-> 完整规范见 [TELEBOX_DEVELOPMENT.md](https://github.com/TeleBoxOrg/TeleBox/blob/main/TELEBOX_DEVELOPMENT.md)
+> 完整规范见 [TELEBOX_DEVELOPMENT.md](https://github.com/MiCat-S/TeleBox/blob/main/TELEBOX_DEVELOPMENT.md)
 
 ## 🔌 插件生态
 
@@ -194,12 +194,12 @@ abstract class Plugin {
 
 <div align="center">
 
-[![安装指南](https://img.shields.io/badge/📋_完整安装指南-INSTALL.md-green?style=for-the-badge)](https://github.com/TeleBoxOrg/TeleBox/blob/main/INSTALL.md)
+[![安装指南](https://img.shields.io/badge/📋_完整安装指南-INSTALL.md-green?style=for-the-badge)](https://github.com/MiCat-S/TeleBox/blob/main/INSTALL.md)
 
 </div>
 
 ```bash
-git clone https://github.com/TeleBoxOrg/TeleBox.git ~/telebox
+git clone https://github.com/MiCat-S/TeleBox.git ~/telebox
 cd ~/telebox && npm install && npm start
 # 生产环境建议：pm2 start "npm start" --name telebox
 ```
@@ -224,8 +224,8 @@ npm run dev   # 开发模式，前缀改为 ! / ！
 
 | | |
 |:--:|:--:|
-| [![TeleBox](https://img.shields.io/badge/📦_TeleBox-blue?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox) | [![TeleBox-Next](https://img.shields.io/badge/📦_TeleBox--Next-blue?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox-Next) |
-| [![Plugins](https://img.shields.io/badge/🔌_TeleBox--Plugins-green?style=for-the-badge&logo=github)](https://github.com/MiCat-S/TeleBox-Plugins) | [![Issues](https://img.shields.io/badge/🆘_Issues-red?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox/issues) |
+| [![TeleBox](https://img.shields.io/badge/📦_TeleBox-blue?style=for-the-badge&logo=github)](https://github.com/MiCat-S/TeleBox) | [![TeleBox-Next](https://img.shields.io/badge/📦_TeleBox--Next-blue?style=for-the-badge&logo=github)](https://github.com/TeleBoxOrg/TeleBox-Next) |
+| [![Plugins](https://img.shields.io/badge/🔌_TeleBox--Plugins-green?style=for-the-badge&logo=github)](https://github.com/MiCat-S/TeleBox-Plugins) | [![Issues](https://img.shields.io/badge/🆘_Issues-red?style=for-the-badge&logo=github)](https://github.com/MiCat-S/TeleBox/issues) |
 
 <div align="center">
 
