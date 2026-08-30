@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import readline from "readline";
+import crypto from "crypto";
 
 interface TelegramAPI {
   api_id?: number;
@@ -19,9 +20,68 @@ interface TelegramAPI {
 
 const CONFIG_PATH = path.join(process.cwd(), "config.json");
 
+function ensurePrivateConfigPath(filePath: string): void {
+  const directory = path.dirname(filePath);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    fs.chmodSync(directory, 0o700);
+    if (fs.existsSync(filePath)) fs.chmodSync(filePath, 0o600);
+  }
+}
+
+function writePrivateJsonAtomic(filePath: string, value: unknown): void {
+  ensurePrivateConfigPath(filePath);
+  const tempPath = `${filePath}.${process.pid}.${cryptoRandomSuffix()}.tmp`;
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(tempPath, "wx", 0o600);
+    fs.writeFileSync(fd, JSON.stringify(value, null, 2), "utf-8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, filePath);
+    if (process.platform !== "win32") fs.chmodSync(filePath, 0o600);
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  }
+}
+
+function cryptoRandomSuffix(): string {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+function redactProxyUrl(proxyUrl: string): string {
+  try {
+    const url = new URL(proxyUrl);
+    const auth = url.username || url.password ? "***:***@" : "";
+    return `${url.protocol}//${auth}${url.host}${url.pathname}`;
+  } catch {
+    return proxyUrl.replace(/\/\/[^/@\s]+@/, "//***:***@");
+  }
+}
+
+function redactProxyObject(proxy: unknown): unknown {
+  if (!proxy || typeof proxy !== "object") return proxy;
+  const input = proxy as Record<string, unknown>;
+  const output: Record<string, unknown> = { ...input };
+  if (output.username) output.username = "***";
+  if (output.password) output.password = "***";
+  if (output.auth && typeof output.auth === "object") {
+    const auth = output.auth as Record<string, unknown>;
+    output.auth = {
+      ...auth,
+      username: auth.username ? "***" : auth.username,
+      password: auth.password ? "***" : auth.password,
+    };
+  }
+  return output;
+}
+
 function ensureConfigFileExists(): void {
+  ensurePrivateConfigPath(CONFIG_PATH);
   if (!fs.existsSync(CONFIG_PATH) || fs.statSync(CONFIG_PATH).size === 0) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), "utf-8");
+    writePrivateJsonAtomic(CONFIG_PATH, {});
   }
 }
 
@@ -37,7 +97,7 @@ function loadConfig(): TelegramAPI {
 }
 
 function saveConfig(config: TelegramAPI): void {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  writePrivateJsonAtomic(CONFIG_PATH, config);
 }
 
 function promptInput(question: string): Promise<string> {
@@ -105,4 +165,11 @@ function getApiConfig(): Promise<TelegramAPI> {
   return configPromise;
 }
 
-export { getApiConfig, storeStringSession };
+export {
+  ensurePrivateConfigPath,
+  getApiConfig,
+  redactProxyObject,
+  redactProxyUrl,
+  storeStringSession,
+  writePrivateJsonAtomic,
+};

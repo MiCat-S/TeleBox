@@ -6,9 +6,12 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { JSONFilePreset } from "lowdb/node";
-import type { Low } from "lowdb";
+import { Low, type Adapter } from "lowdb";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import {
+  ensurePrivateConfigPath,
+  writePrivateJsonAtomic,
+} from "@utils/apiConfig";
 import type { PanelAdmin, PanelConfig } from "./types";
 
 const DEFAULT_CONFIG: PanelConfig = {
@@ -28,6 +31,22 @@ const DEFAULT_CONFIG: PanelConfig = {
 let db: Low<PanelConfig> | null = null;
 let dbPromise: Promise<Low<PanelConfig>> | null = null;
 
+export class SecurePanelConfigAdapter implements Adapter<PanelConfig> {
+  constructor(private readonly filePath: string) {}
+
+  async read(): Promise<PanelConfig | null> {
+    ensurePrivateConfigPath(this.filePath);
+    if (!fs.existsSync(this.filePath) || fs.statSync(this.filePath).size === 0) {
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(this.filePath, "utf-8")) as PanelConfig;
+  }
+
+  async write(data: PanelConfig): Promise<void> {
+    writePrivateJsonAtomic(this.filePath, data);
+  }
+}
+
 function configPath(): string {
   return path.join(createDirectoryInAssets("panel"), "config.json");
 }
@@ -43,10 +62,13 @@ async function getDb(): Promise<Low<PanelConfig>> {
   if (!dbPromise) {
     dbPromise = (async () => {
       const file = configPath();
-      const instance = await JSONFilePreset<PanelConfig>(file, {
+      const hadConfig = fs.existsSync(file) && fs.statSync(file).size > 0;
+      const instance = new Low<PanelConfig>(new SecurePanelConfigAdapter(file), {
         ...DEFAULT_CONFIG,
+        admins: [],
       });
-      let dirty = false;
+      await instance.read();
+      let dirty = !hadConfig;
       // Merge defaults for forward-compat fields.
       const defaults = DEFAULT_CONFIG as unknown as Record<string, unknown>;
       const data = instance.data as unknown as Record<string, unknown>;

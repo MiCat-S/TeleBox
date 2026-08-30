@@ -4,6 +4,7 @@ import { logger } from "@utils/logger"; // 引入 logger 以便尽早初始化
 import { startRuntime, shutdownRuntime } from "@utils/runtimeManager";
 import { initPluginBaseConfig } from "@utils/pluginBase";
 import { cleanCoreDumps } from "@utils/coreDumpCleaner";
+import { redactProxyUrl } from "@utils/apiConfig";
 import "./hook/patches/telegram.patch";
 
 initPluginBaseConfig();
@@ -15,8 +16,8 @@ const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy;
 const noProxy = process.env.NO_PROXY || process.env.no_proxy;
 
 if (httpProxy || httpsProxy) {
-  console.log(`[PROXY] HTTP_PROXY: ${httpProxy || "not set"}`);
-  console.log(`[PROXY] HTTPS_PROXY: ${httpsProxy || "not set"}`);
+  console.log(`[PROXY] HTTP_PROXY: ${httpProxy ? redactProxyUrl(httpProxy) : "not set"}`);
+  console.log(`[PROXY] HTTPS_PROXY: ${httpsProxy ? redactProxyUrl(httpsProxy) : "not set"}`);
   console.log(`[PROXY] NO_PROXY: ${noProxy || "not set"}`);
 
   // 解析代理 URL

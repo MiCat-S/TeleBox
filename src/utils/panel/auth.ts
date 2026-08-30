@@ -3,7 +3,7 @@
  */
 
 import crypto from "crypto";
-import type { PanelSession } from "./types";
+import type { PanelCapability, PanelSession } from "./types";
 import { readPanelConfig } from "./configStore";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
@@ -166,4 +166,27 @@ export async function isPanelAdminUser(userId: number): Promise<{
     return { allowed: true, isOwner: false };
   }
   return { allowed: false, isOwner: false, reason: "非 panel 管理员" };
+}
+
+export function canUsePanelCapability(
+  isOwner: boolean,
+  capability: PanelCapability,
+): boolean {
+  return capability === "read" || isOwner;
+}
+
+export async function requirePanelCapability(
+  session: PanelSession,
+  capability: PanelCapability,
+): Promise<void> {
+  if (capability === "read") return;
+  const gate = await isPanelAdminUser(session.userId);
+  if (canUsePanelCapability(gate.isOwner, capability)) return;
+  const error = new Error("该操作仅限 owner") as Error & { status?: number };
+  error.status = 403;
+  throw error;
+}
+
+export async function requireOwner(session: PanelSession): Promise<void> {
+  await requirePanelCapability(session, "panel:write");
 }

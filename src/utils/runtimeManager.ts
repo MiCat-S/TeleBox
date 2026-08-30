@@ -1,7 +1,7 @@
 import { TelegramClient, events } from "teleproto";
 import { UpdateConnectionState } from "teleproto/network";
 import { StringSession } from "teleproto/sessions";
-import { getApiConfig } from "./apiConfig";
+import { getApiConfig, redactProxyObject } from "./apiConfig";
 import { readAppName } from "./teleboxInfoHelper";
 import { logger } from "./logger";
 import { initializeClientSession } from "./loginManager";
@@ -117,7 +117,7 @@ async function createClient(): Promise<TelegramClient> {
   const api = await getApiConfig();
   const proxy = api.proxy;
   if (proxy) {
-    console.log("使用代理连接 Telegram:", proxy);
+    console.log("使用代理连接 Telegram:", redactProxyObject(proxy));
   }
 
   // teleproto ≥1.228.0 enables TCP keepalive + setNoDelay natively;

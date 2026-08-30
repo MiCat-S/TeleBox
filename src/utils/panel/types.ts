@@ -8,6 +8,13 @@ export interface PanelAdmin {
   addedAt: number;
 }
 
+export type PanelCapability =
+  | "read"
+  | "tpm:write"
+  | "settings:write"
+  | "panel:write"
+  | "admins:write";
+
 export interface PanelConfig {
   /** Master switch. When false the bot + HTTP server stay down. */
   enabled: boolean;

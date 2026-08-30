@@ -1,4 +1,4 @@
-import type { RuntimeContext, CommandResult, ToolResult, AgentScope } from "./agentTypes";
+import type { RuntimeContext, CommandResult, ToolResult } from "./agentTypes";
 import { getPlatform } from "./agentTypes";
 
 // plugins/agent/tools.ts
@@ -288,21 +288,6 @@ function runRg(args: string[], cwd: string): Promise<{ code: number; stdout: str
     );
   });
 }
-function assertCommandAllowed(command: string, scope: AgentScope) {
-  if (scope === "system") return;
-  const dangerous = [
-    /\b(?:shutdown|reboot|restart-computer|format|diskpart|bcdedit)\b/i,
-    /\b(?:winget|choco|scoop|apt|apt-get|dnf|yum|pacman|brew)\s+(?:install|uninstall|remove|upgrade|update)\b/i,
-    /\breg(?:\.exe)?\s+(?:add|delete|import)\b/i,
-    /\bnet\s+(?:user|localgroup)\b/i,
-    /\bgit\s+(?:reset\s+--hard|clean\s+-[^\s]*[fd])\b/i,
-    /\bRemove-Item\b[^\r\n]*(?:-Recurse|-Force)/i,
-    /\b(?:rm|rmdir)\b[^\r\n]*(?:-rf|-fr|\/s)\b/i
-  ];
-  if (dangerous.some((pattern) => pattern.test(command))) {
-    throw new Error("\u8BE5\u547D\u4EE4\u8D85\u51FA TeleBox \u9879\u76EE\u6A21\u5F0F\u7684\u5B89\u5168\u8FB9\u754C\uFF1B\u8BF7\u6539\u7528 .sysagent \u660E\u786E\u6267\u884C\u7CFB\u7EDF\u7EA7\u4EFB\u52A1");
-  }
-}
 function stripPluginPrefix(commandLine: string) {
   const trimmed = commandLine.trim();
   const matched = [...(0, import_pluginManager.getPrefixes)()].sort((left, right) => right.length - left.length).find((prefix) => trimmed.startsWith(prefix));
@@ -466,7 +451,11 @@ size: ${stat.size} bytes`
   if (name === "run_command") {
     const command = asString(args.command).trim();
     if (!command) throw new Error("command \u4E0D\u80FD\u4E3A\u7A7A");
-    assertCommandAllowed(command, context.scope ?? "private");
+    if (context.scope !== "system") {
+      throw new Error(
+        "项目智能体已禁用任意 shell；请使用受控文件工具，系统级命令必须由 .sysagent 明确执行",
+      );
+    }
     const cwd = resolveAgentPath(context, args.cwd, defaultRoot(context));
     const stat = await import_fs.promises.stat(cwd);
     if (!stat.isDirectory()) throw new Error("cwd \u4E0D\u662F\u76EE\u5F55");
@@ -518,8 +507,12 @@ size: ${stat.size} bytes`
   throw new Error(`\u672A\u77E5\u5DE5\u5177\uFF1A${name}`);
 }
 function createToolRuntime(runtime: RuntimeContext) {
+  const definitions =
+    runtime.scope === "system"
+      ? TOOL_DEFINITIONS
+      : TOOL_DEFINITIONS.filter((tool) => tool.name !== "run_command");
   return {
-    definitions: runtime.answerOnly ? [] : TOOL_DEFINITIONS,
+    definitions: runtime.answerOnly ? [] : definitions,
     maxCallsPerTurn: MAX_TOOL_CALLS_PER_TURN,
     execute: async (name: string, args: Record<string, any>) => {
       await runtime.onToolStart(name, args);

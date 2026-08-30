@@ -24,6 +24,8 @@ import {
   issueSessionToken,
   verifySessionToken,
   isPanelAdminUser,
+  requireOwner,
+  requirePanelCapability,
 } from "./auth";
 import { getOwnerId } from "./owner";
 import {
@@ -33,7 +35,7 @@ import {
 } from "./settingsRegistry";
 import * as tpm from "./tpmService";
 import * as help from "./helpService";
-import type { PanelSession, PanelStatusSnapshot } from "./types";
+import type { PanelCapability, PanelSession, PanelStatusSnapshot } from "./types";
 import { getMenuButtonState } from "./menuButton";
 
 const WEBAPP_DIR = path.join(__dirname, "webapp");
@@ -143,6 +145,33 @@ async function requireSession(
     throw err;
   }
   return session;
+}
+
+export function getRequiredPanelCapability(
+  method: string,
+  pathname: string,
+): PanelCapability {
+  const writeTpmRoutes = new Set([
+    "/api/tpm/install",
+    "/api/tpm/uninstall",
+    "/api/tpm/update",
+    "/api/tpm/source",
+  ]);
+  if (method === "POST" && writeTpmRoutes.has(pathname)) return "tpm:write";
+  if (method === "GET" && pathname === "/api/tpm/update/stream") {
+    return "tpm:write";
+  }
+  if (method === "PUT" && pathname.startsWith("/api/settings/")) {
+    return "settings:write";
+  }
+  if (method === "PUT" && pathname === "/api/config") return "panel:write";
+  if (
+    (method === "POST" && pathname === "/api/admins") ||
+    (method === "DELETE" && pathname.startsWith("/api/admins/"))
+  ) {
+    return "admins:write";
+  }
+  return "read";
 }
 
 async function buildStatus(): Promise<PanelStatusSnapshot> {
@@ -303,6 +332,7 @@ async function routeApi(
 
   // Everything else requires session
   const session = await requireSession(req);
+  await requirePanelCapability(session, getRequiredPanelCapability(method, p));
 
   if (method === "GET" && p === "/api/me") {
     const gate = await isPanelAdminUser(session.userId);
@@ -313,6 +343,7 @@ async function routeApi(
         username: session.username,
         firstName: session.firstName,
         isOwner: gate.isOwner,
+        readOnly: !gate.isOwner,
         exp: session.exp,
       },
     };
@@ -352,7 +383,11 @@ async function routeApi(
     return { status: 200, body: await tpm.tpmUninstall(names) };
   }
   if (method === "POST" && p === "/api/tpm/update") {
-    return { status: 200, body: await tpm.tpmUpdateAll() };
+    const body = await parseJsonBody(req);
+    return {
+      status: 200,
+      body: await tpm.tpmUpdateAll({ force: body.force === true }),
+    };
   }
   if (method === "GET" && p === "/api/tpm/source") {
     return { status: 200, body: await tpm.tpmGetSource() };
@@ -438,20 +473,12 @@ async function routeApi(
     };
   }
   if (method === "POST" && p === "/api/admins") {
-    const gate = await isPanelAdminUser(session.userId);
-    if (!gate.isOwner) {
-      return { status: 403, body: { error: "仅 owner 可添加管理员" } };
-    }
     const body = await parseJsonBody(req);
     const userId = Number(body.userId);
     const admins = await addPanelAdmin(userId, body.note ? String(body.note) : undefined);
     return { status: 200, body: { admins } };
   }
   if (method === "DELETE" && p.startsWith("/api/admins/")) {
-    const gate = await isPanelAdminUser(session.userId);
-    if (!gate.isOwner) {
-      return { status: 403, body: { error: "仅 owner 可删除管理员" } };
-    }
     const userId = Number(decodeURIComponent(p.slice("/api/admins/".length)));
     const admins = await removePanelAdmin(userId);
     return { status: 200, body: { admins } };
@@ -480,10 +507,6 @@ async function routeApi(
     };
   }
   if (method === "PUT" && p === "/api/config") {
-    const gate = await isPanelAdminUser(session.userId);
-    if (!gate.isOwner) {
-      return { status: 403, body: { error: "仅 owner 可修改 panel 配置" } };
-    }
     const body = await parseJsonBody(req);
     if (typeof body.botToken === "string" && body.botToken.includes("••••")) {
       delete body.botToken;
@@ -575,7 +598,8 @@ async function handleTpmUpdateStream(
   res: http.ServerResponse,
 ): Promise<void> {
   try {
-    await requireSession(req);
+    const session = await requireSession(req);
+    await requireOwner(session);
   } catch (e: unknown) {
     const err = e as Error & { status?: number };
     sendJson(res, err.status || 401, { error: err.message || "未授权" });
@@ -606,7 +630,12 @@ async function handleTpmUpdateStream(
   req.on("close", cleanup);
 
   try {
-    await tpm.tpmUpdateAll();
+    const host = req.headers.host || "localhost";
+    const requestUrl = new URL(req.url || "/", `http://${host}`);
+    const force = ["1", "true"].includes(
+      (requestUrl.searchParams.get("force") || "").toLowerCase(),
+    );
+    await tpm.tpmUpdateAll({ force });
     cleanup();
     try {
       res.write("event: done\ndata: {}\n\n");
