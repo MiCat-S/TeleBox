@@ -22,7 +22,10 @@ class CronManager {
     context?: GenerationContext
   ): () => void {
     if (this.tasks.has(name)) {
-      throw new Error(`Cron task "${name}" already exists.`);
+      console.warn(
+        `[CRON] Cron task "${name}" already exists; keeping the existing task.`,
+      );
+      return () => undefined;
     }
 
     const validate = validateCronExpression(cron)

@@ -9,10 +9,16 @@ import axios from "axios";
 import { Api } from "teleproto";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 import { JSONFilePreset } from "lowdb/node";
-import { getPrefixes } from "@utils/pluginManager";
+import {
+  getLastPluginLoadReport,
+  getPrefixes,
+  pluginFailedInReport,
+  withPluginOperationLock,
+  writeJsonFileAtomically,
+} from "@utils/pluginManager";
 import { tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import { htmlEscape } from "@utils/htmlEscape";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import {
   sendOrEditMessage,
   reloadAndFinalize,
@@ -41,11 +47,29 @@ interface PluginRecord {
   _updatedAt: number;
   /** sha256 of content last written by TPM install/update; used to detect local edits */
   _contentHash?: string;
+  _baseline?: "trusted" | "unknown";
 }
 
 type Database = Record<string, PluginRecord>;
 type RemotePluginInfo = { url: string; desc?: string };
 type RemotePluginsIndex = Record<string, RemotePluginInfo>;
+
+export function buildReconciledPluginRecord(
+  remote: RemotePluginInfo,
+  old?: PluginRecord,
+): PluginRecord {
+  return {
+    url: remote.url,
+    desc: remote.desc || old?.desc || "暂无描述",
+    _updatedAt: old?._updatedAt || 0,
+    ...(old?._contentHash ? { _contentHash: old._contentHash } : {}),
+    ...(old?._baseline
+      ? { _baseline: old._baseline }
+      : old
+        ? {}
+        : { _baseline: "unknown" as const }),
+  };
+}
 
 interface CustomSourceConfig {
   url: string;
@@ -60,20 +84,30 @@ function getCustomSourceConfigPath(): string {
 }
 
 async function getCustomSourceConfig(): Promise<CustomSourceConfig | null> {
+  const cfgPath = getCustomSourceConfigPath();
+  if (!fs.existsSync(cfgPath)) return null;
   try {
-    const cfgPath = getCustomSourceConfigPath();
-    if (!fs.existsSync(cfgPath)) return null;
     const raw = fs.readFileSync(cfgPath, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
+    const parsed = JSON.parse(raw) as { url?: unknown };
+    if (typeof parsed.url !== "string" || !parsed.url.trim()) {
+      throw new Error("缺少 url");
+    }
+    return { url: parsed.url.trim() };
+  } catch (error) {
+    throw new Error(
+      `自定义插件源配置无效: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 }
 
 async function setCustomSourceConfig(url: string): Promise<void> {
   const cfgPath = getCustomSourceConfigPath();
-  fs.writeFileSync(cfgPath, JSON.stringify({ url }, null, 2));
+  writeJsonFileAtomically(cfgPath, { url });
 }
+
+export const withTpmOperationLock = withPluginOperationLock;
 
 async function clearCustomSourceConfig(): Promise<void> {
   const cfgPath = getCustomSourceConfigPath();
@@ -82,22 +116,83 @@ async function clearCustomSourceConfig(): Promise<void> {
   }
 }
 
-function convertGithubToRawPluginUrl(url: string): string {
+export function resolvePluginsIndexUrl(input: string): string {
+  let parsed: URL;
   try {
-    const parsed = new URL(url);
-    if (parsed.hostname === "github.com") {
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      if (parts.length >= 2) {
-        const [owner, repo, ...rest] = parts;
-        // If URL points to a branch other than main, use it; else default to main
-        const branch = rest.length >= 1 && rest[0] !== "blob" && rest[0] !== "tree" ? rest[0] : "main";
-        return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/plugins.json`;
-      }
-    }
-    return url;
+    parsed = new URL(input.trim());
   } catch {
-    return url;
+    throw new Error("插件源 URL 格式无效");
   }
+  if (parsed.protocol !== "https:") {
+    throw new Error("插件源仅支持 HTTPS URL");
+  }
+
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parsed.hostname === "raw.githubusercontent.com") {
+    if (parts.length < 4 || parts[parts.length - 1] !== "plugins.json") {
+      throw new Error("raw 插件源必须直接指向 plugins.json");
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  }
+  if (parsed.hostname !== "github.com" || parts.length < 2) {
+    throw new Error("插件源必须是 GitHub 仓库或 raw plugins.json URL");
+  }
+
+  const [owner, rawRepo, kind, ...rest] = parts;
+  const repo = rawRepo.replace(/\.git$/, "");
+  if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) {
+    throw new Error("GitHub 仓库 owner/repo 无效");
+  }
+  if (!kind) {
+    return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/plugins.json`;
+  }
+  if (kind !== "tree" && kind !== "blob") {
+    throw new Error("GitHub 插件源仅支持仓库根目录、/tree/<branch> 或 plugins.json 文件");
+  }
+  if (kind === "blob") {
+    if (rest.length !== 2 || rest[1] !== "plugins.json") {
+      throw new Error("GitHub blob URL 必须指向仓库根目录的 plugins.json");
+    }
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${rest[0]}/plugins.json`;
+  }
+  if (rest.length === 0) throw new Error("GitHub tree URL 缺少分支名");
+  if (rest.length > 1 || decodeURIComponent(rest[0]).includes("/")) {
+    throw new Error(
+      "含斜杠的分支无法从 /tree/ URL 无歧义解析，请直接提供对应的 raw plugins.json URL",
+    );
+  }
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${rest[0]}/plugins.json`;
+}
+
+function convertGithubToRawPluginUrl(url: string): string {
+  return resolvePluginsIndexUrl(url);
+}
+
+function validateRemotePluginsIndex(
+  value: unknown,
+  sourceLabel: string,
+): RemotePluginsIndex {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${sourceLabel} plugins.json 不是对象`);
+  }
+  const result: RemotePluginsIndex = {};
+  for (const [name, rawInfo] of Object.entries(value)) {
+    assertValidPluginName(name);
+    if (!rawInfo || typeof rawInfo !== "object" || Array.isArray(rawInfo)) {
+      throw new Error(`${sourceLabel} 插件 ${name} 的记录无效`);
+    }
+    const info = rawInfo as Partial<RemotePluginInfo>;
+    if (typeof info.url !== "string" || !info.url.trim()) {
+      throw new Error(`${sourceLabel} 插件 ${name} 缺少 URL`);
+    }
+    result[name] = {
+      url: info.url.trim(),
+      ...(typeof info.desc === "string" ? { desc: info.desc } : {}),
+    };
+  }
+  return result;
 }
 
 /** Fetch official + custom source index (custom overrides official). */
@@ -108,7 +203,9 @@ async function getMergedRemotePluginsIndex(): Promise<RemotePluginsIndex> {
   try {
     const officialRes = await fetchWithRetry<RemotePluginsIndex>(PLUGINS_INDEX_URL);
     if (officialRes.status === 200 && officialRes.data && typeof officialRes.data === "object") {
-      Object.assign(merged, officialRes.data);
+      Object.assign(merged, validateRemotePluginsIndex(officialRes.data, "官方源"));
+    } else {
+      throw new Error(`HTTP ${officialRes.status}`);
     }
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -122,11 +219,16 @@ async function getMergedRemotePluginsIndex(): Promise<RemotePluginsIndex> {
     try {
       const customRes = await fetchWithRetry<RemotePluginsIndex>(rawUrl);
       if (customRes.status === 200 && customRes.data && typeof customRes.data === "object") {
-        Object.assign(merged, customRes.data);
+        Object.assign(merged, validateRemotePluginsIndex(customRes.data, "自定义源"));
+      } else {
+        throw new Error(`HTTP ${customRes.status}`);
       }
     } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.log(`[TPM] 自定义插件源获取失败: ${errMsg}`);
+      throw new Error(
+        `自定义插件源获取失败，已中止操作: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
   
@@ -134,6 +236,85 @@ async function getMergedRemotePluginsIndex(): Promise<RemotePluginsIndex> {
 }
 
 const PLUGIN_PATH = path.join(process.cwd(), "plugins");
+const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+export interface PluginFileSnapshot {
+  name: string;
+  filePath: string;
+  existed: boolean;
+  content?: Buffer;
+}
+
+function assertValidPluginName(name: string): void {
+  if (!PLUGIN_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `非法插件名 "${name}"：仅允许 1-64 位字母、数字、下划线和连字符，且必须以字母或数字开头`,
+    );
+  }
+}
+
+function lstatIfExists(filePath: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function ensurePluginDirectory(): void {
+  const stat = lstatIfExists(PLUGIN_PATH);
+  if (stat) {
+    if (stat.isSymbolicLink()) {
+      throw new Error(`插件目录不能是符号链接: ${PLUGIN_PATH}`);
+    }
+    if (!stat.isDirectory()) throw new Error(`插件目录路径不是目录: ${PLUGIN_PATH}`);
+    return;
+  }
+  fs.mkdirSync(PLUGIN_PATH, { recursive: true });
+}
+
+export function resolvePluginPathWithin(
+  root: string,
+  name: string,
+  options?: { mustExist?: boolean },
+): string {
+  assertValidPluginName(name);
+  const rootStat = lstatIfExists(root);
+  if (rootStat) {
+    if (rootStat.isSymbolicLink()) {
+      throw new Error(`插件目录不能是符号链接: ${root}`);
+    }
+    if (!rootStat.isDirectory()) throw new Error(`插件目录路径不是目录: ${root}`);
+  } else {
+    fs.mkdirSync(root, { recursive: true });
+  }
+  const resolvedRoot = path.resolve(root);
+  const filePath = path.resolve(resolvedRoot, `${name}.ts`);
+  const relative = path.relative(resolvedRoot, filePath);
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`插件路径越界: ${name}`);
+  }
+  const fileStat = lstatIfExists(filePath);
+  if (fileStat?.isSymbolicLink()) {
+    throw new Error(`拒绝访问符号链接插件: ${name}`);
+  }
+  if (fileStat && !fileStat.isFile()) {
+    throw new Error(`插件路径不是普通文件: ${name}`);
+  }
+  if (options?.mustExist && !fileStat) {
+    throw new Error("插件文件不存在");
+  }
+  return filePath;
+}
+
+function resolvePluginFilePath(
+  name: string,
+  options?: { mustExist?: boolean },
+): string {
+  ensurePluginDirectory();
+  return resolvePluginPathWithin(PLUGIN_PATH, name, options);
+}
 
 class EntityManager {
   private count = 0;
@@ -177,6 +358,7 @@ function isLocallyModifiedPlugin(
   if (record._contentHash) {
     return localHash !== record._contentHash;
   }
+  if (record._baseline === "unknown") return true;
   // Legacy records without hash: treat mtime newer than last TPM write as local edit
   try {
     const mtimeMs = fs.statSync(filePath).mtimeMs;
@@ -185,6 +367,141 @@ function isLocallyModifiedPlugin(
   } catch {
     return false;
   }
+}
+
+function snapshotPluginFile(name: string): PluginFileSnapshot {
+  const filePath = resolvePluginFilePath(name);
+  const existed = fs.existsSync(filePath);
+  return {
+    name,
+    filePath,
+    existed,
+    ...(existed ? { content: fs.readFileSync(filePath) } : {}),
+  };
+}
+
+function atomicReplaceFile(filePath: string, content: string | Buffer): void {
+  const existing = lstatIfExists(filePath);
+  const mode = existing?.isFile() ? existing.mode & 0o777 : 0o600;
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `_${path.basename(filePath)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
+  );
+  try {
+    fs.writeFileSync(tempPath, content, { flag: "wx", mode });
+    if (lstatIfExists(filePath)?.isSymbolicLink()) {
+      throw new Error(`拒绝覆盖符号链接插件: ${path.basename(filePath)}`);
+    }
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  }
+}
+
+export function replacePluginFileAtomicallyWithin(
+  root: string,
+  name: string,
+  content: string,
+  backupWriter?: (snapshot: PluginFileSnapshot) => void,
+): PluginFileSnapshot {
+  const filePath = resolvePluginPathWithin(root, name);
+  const existed = fs.existsSync(filePath);
+  const snapshot: PluginFileSnapshot = {
+    name,
+    filePath,
+    existed,
+    ...(existed ? { content: fs.readFileSync(filePath) } : {}),
+  };
+  backupWriter?.(snapshot);
+  atomicReplaceFile(snapshot.filePath, content);
+  return snapshot;
+}
+
+function writePluginAtomically(name: string, content: string): PluginFileSnapshot {
+  return replacePluginFileAtomicallyWithin(
+    PLUGIN_PATH,
+    name,
+    content,
+    saveSnapshotBackup,
+  );
+}
+
+function deletePluginFile(name: string): PluginFileSnapshot {
+  const snapshot = snapshotPluginFile(name);
+  if (snapshot.existed) fs.unlinkSync(snapshot.filePath);
+  return snapshot;
+}
+
+function restorePluginFiles(snapshots: PluginFileSnapshot[]): void {
+  for (const snapshot of [...snapshots].reverse()) {
+    const filePath = resolvePluginFilePath(snapshot.name);
+    if (snapshot.existed && snapshot.content) {
+      atomicReplaceFile(filePath, snapshot.content);
+    } else if (lstatIfExists(filePath)) {
+      if (lstatIfExists(filePath)?.isSymbolicLink()) {
+        throw new Error(`回滚时发现符号链接插件: ${snapshot.name}`);
+      }
+      fs.unlinkSync(filePath);
+    }
+  }
+}
+
+function saveSnapshotBackup(snapshot: PluginFileSnapshot): void {
+  if (!snapshot.existed || !snapshot.content) return;
+  const cacheDir = createDirectoryInTemp("plugin_backups");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
+  fs.writeFileSync(
+    path.join(
+      cacheDir,
+      `${snapshot.name}_${timestamp}_${randomBytes(6).toString("hex")}.ts.bak`,
+    ),
+    snapshot.content,
+    { flag: "wx", mode: 0o600 },
+  );
+}
+
+async function persistPluginMutations(
+  snapshots: PluginFileSnapshot[],
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  previousDb: Database,
+): Promise<void> {
+  try {
+    await db.write();
+  } catch (error) {
+    restorePluginFiles(snapshots);
+    db.data = { ...previousDb };
+    throw error;
+  }
+}
+
+async function reloadWithRollback(
+  snapshots: PluginFileSnapshot[],
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  previousDb: Database,
+): Promise<{ ok: boolean; failedNames: string[]; recovered: boolean }> {
+  const { loadPlugins } = require("@utils/pluginManager") as typeof import("@utils/pluginManager");
+  const loaded = await loadPlugins();
+  const targetNames = [...new Set(snapshots.map((snapshot) => snapshot.name))];
+  const report = getLastPluginLoadReport();
+  const failedNames = loaded
+    ? targetNames.filter((name) => pluginFailedInReport(report, name, PLUGIN_PATH))
+    : targetNames;
+  if (failedNames.length === 0) {
+    return { ok: true, failedNames: [], recovered: true };
+  }
+
+  const failedSet = new Set(failedNames);
+  restorePluginFiles(snapshots.filter((snapshot) => failedSet.has(snapshot.name)));
+  for (const name of failedNames) {
+    if (previousDb[name]) db.data[name] = { ...previousDb[name] };
+    else delete db.data[name];
+  }
+  await db.write();
+  const recovered = await loadPlugins();
+  if (!recovered) {
+    console.error("[TPM] 恢复旧插件文件后仍无法重新加载");
+  }
+  return { ok: false, failedNames, recovered };
 }
 
 /**
@@ -317,15 +634,18 @@ function listLocalPluginNames(): string[] {
   try {
     if (!fs.existsSync(PLUGIN_PATH)) return [];
     return fs
-      .readdirSync(PLUGIN_PATH)
+      .readdirSync(PLUGIN_PATH, { withFileTypes: true })
       .filter(
-        (f) =>
-          f.endsWith(".ts") &&
-          !f.includes("backup") &&
-          !f.endsWith(".d.ts") &&
-          !f.startsWith("_"),
+        (entry) =>
+          entry.isFile() &&
+          !entry.isSymbolicLink() &&
+          entry.name.endsWith(".ts") &&
+          !entry.name.includes("backup") &&
+          !entry.name.endsWith(".d.ts") &&
+          !entry.name.startsWith("_") &&
+          PLUGIN_NAME_PATTERN.test(entry.name.replace(/\.ts$/, "")),
       )
-      .map((f) => f.replace(/\.ts$/, ""));
+      .map((entry) => entry.name.replace(/\.ts$/, ""));
   } catch (err: unknown) {
     console.error("[TPM] 读取本地插件目录失败:", err);
     return [];
@@ -339,14 +659,7 @@ function listLocalPluginNames(): string[] {
  */
 async function rebuildPluginDb(db: Awaited<ReturnType<typeof getDatabase>>): Promise<number> {
   const localNames = listLocalPluginNames();
-  let catalog: RemotePluginsIndex = {};
-  try {
-    catalog = await getMergedRemotePluginsIndex();
-  } catch (error: unknown) {
-    console.error("[TPM] 获取远程插件目录失败，重建使用旧记录:", error);
-    // keep existing data on network failure
-    return 0;
-  }
+  const catalog = await getMergedRemotePluginsIndex();
 
   let written = 0;
   const now = Date.now();
@@ -356,14 +669,7 @@ async function rebuildPluginDb(db: Awaited<ReturnType<typeof getDatabase>>): Pro
   for (const name of localNames) {
     const entry = catalog[name];
     if (entry?.url) {
-      db.data[name] = {
-        url: entry.url,
-        desc: entry.desc || oldData[name]?.desc || "暂无描述",
-        _updatedAt: oldData[name]?._updatedAt || now,
-        ...(oldData[name]?._contentHash
-          ? { _contentHash: oldData[name]._contentHash }
-          : {}),
-      };
+      db.data[name] = buildReconciledPluginRecord(entry, oldData[name]);
     } else if (oldData[name]) {
       // local plugin has no remote match — keep old record
       db.data[name] = { ...oldData[name] };
@@ -477,8 +783,9 @@ async function fetchWithRetry<T>(
 
 async function installRemotePlugin(plugin: string, msg: Api.Message) {
   const statusMsg = await sendOrEditMessage(msg, `正在安装插件 ${plugin}...`);
-  const mergedCatalog = await getMergedRemotePluginsIndex();
-  if (Object.keys(mergedCatalog).length > 0) {
+  try {
+    assertValidPluginName(plugin);
+    const mergedCatalog = await getMergedRemotePluginsIndex();
     if (!mergedCatalog[plugin]) {
       await sendOrEditMessage(statusMsg, `未找到插件 ${plugin} 的远程资源`);
       return;
@@ -491,39 +798,30 @@ async function installRemotePlugin(plugin: string, msg: Api.Message) {
       await sendOrEditMessage(statusMsg, `无法下载插件 ${plugin}`);
       return;
     }
-    const filePath = path.join(PLUGIN_PATH, `${plugin}.ts`);
-    const oldBackupPath = path.join(PLUGIN_PATH, `${plugin}.ts.backup`);
+    const db = await getDatabase();
+    const previousDb = { ...db.data };
+    const snapshot = writePluginAtomically(plugin, response.data);
+    db.data[plugin] = {
+      ...mergedCatalog[plugin],
+      url: pluginUrl,
+      _updatedAt: Date.now(),
+      _contentHash: hashPluginContent(response.data),
+      _baseline: "trusted",
+    };
+    await persistPluginMutations([snapshot], db, previousDb);
 
-    if (fs.existsSync(filePath)) {
-      const cacheDir = createDirectoryInTemp("plugin_backups");
-      const timestamp = new Date()
-        .toISOString()
-        .replace(/[:.]/g, "-")
-        .slice(0, -5);
-      const backupPath = path.join(cacheDir, `${plugin}_${timestamp}.ts.bak`);
-      fs.copyFileSync(filePath, backupPath);
-      console.log(`[TPM] 旧插件已转移到缓存: ${backupPath}`);
-    }
-
-    if (fs.existsSync(oldBackupPath)) {
-      fs.unlinkSync(oldBackupPath);
-      console.log(`[TPM] 已清理旧备份文件: ${oldBackupPath}`);
-    }
-
-    fs.writeFileSync(filePath, response.data);
-
-    try {
-      const db = await getDatabase();
-      db.data[plugin] = { ...mergedCatalog[plugin], _updatedAt: Date.now(), _contentHash: hashPluginContent(response.data) };
-      await db.write();
-      console.log(`[TPM] 已记录插件信息到数据库: ${plugin}`);
-    } catch (error) {
-      console.error(`[TPM] 记录插件信息失败: ${error}`);
-    }
-
-    await reloadAndFinalize(statusMsg, `插件 ${plugin} 已安装并加载成功`);
-  } else {
-    await sendOrEditMessage(statusMsg, "无法获取远程插件库（官方和自定义源均失败）");
+    await reloadAndFinalize(statusMsg, `插件 ${plugin} 已安装并加载成功`, {
+      reload: async () => (await reloadWithRollback([snapshot], db, previousDb)).ok,
+      failureText: `❌ 插件 ${plugin} 加载失败，已恢复安装前文件`,
+    });
+  } catch (error) {
+    await sendOrEditMessage(
+      statusMsg,
+      `❌ 安装插件 ${htmlEscape(plugin)} 失败: ${htmlEscape(
+        error instanceof Error ? error.message : String(error),
+      )}`,
+      { parseMode: "html" },
+    );
   }
 }
 
@@ -546,6 +844,9 @@ async function installAllPlugins(msg: Api.Message) {
     let installedCount = 0;
     let failedCount = 0;
     const failedPlugins: string[] = [];
+    const db = await getDatabase();
+    const previousDb = { ...db.data };
+    const snapshots: PluginFileSnapshot[] = [];
 
     await sendOrEditMessage(statusMsg, `📦 开始安装 ${totalPlugins} 个插件...\n\n🔄 进度: 0/${totalPlugins} (0%)`, { parseMode: "html" });
 
@@ -577,39 +878,15 @@ async function installAllPlugins(msg: Api.Message) {
           continue;
         }
 
-        const filePath = path.join(PLUGIN_PATH, `${plugin}.ts`);
-        const oldBackupPath = path.join(PLUGIN_PATH, `${plugin}.ts.backup`);
-
-        if (fs.existsSync(filePath)) {
-          const cacheDir = createDirectoryInTemp("plugin_backups");
-          const timestamp = new Date()
-            .toISOString()
-            .replace(/[:.]/g, "-")
-            .slice(0, -5);
-          const backupPath = path.join(cacheDir, `${plugin}_${timestamp}.ts.bak`);
-          fs.copyFileSync(filePath, backupPath);
-          console.log(`[TPM] 旧插件已转移到缓存: ${backupPath}`);
-        }
-        if (fs.existsSync(oldBackupPath)) {
-          fs.unlinkSync(oldBackupPath);
-          console.log(`[TPM] 已清理旧备份文件: ${oldBackupPath}`);
-        }
-
-        fs.writeFileSync(filePath, response.data);
-
-        try {
-          const db = await getDatabase();
-          db.data[plugin] = {
-            url: pluginUrl,
-            desc: pluginData.desc,
-            _updatedAt: Date.now(),
-            _contentHash: hashPluginContent(response.data),
-          };
-          await db.write();
-          console.log(`[TPM] 已记录插件信息到数据库: ${plugin}`);
-        } catch (dbError) {
-          console.error(`[TPM] 记录插件信息失败: ${dbError}`);
-        }
+        const snapshot = writePluginAtomically(plugin, response.data);
+        snapshots.push(snapshot);
+        db.data[plugin] = {
+          url: pluginUrl,
+          desc: pluginData.desc,
+          _updatedAt: Date.now(),
+          _contentHash: hashPluginContent(response.data),
+          _baseline: "trusted",
+        };
 
         installedCount++;
         await lifecycleDelay(100, "tpm:batch-install-throttle");
@@ -620,6 +897,13 @@ async function installAllPlugins(msg: Api.Message) {
       }
     }
 
+    await persistPluginMutations(snapshots, db, previousDb);
+    const reloadResult = await reloadWithRollback(snapshots, db, previousDb);
+    for (const name of reloadResult.failedNames) {
+      installedCount = Math.max(0, installedCount - 1);
+      failedCount++;
+      failedPlugins.push(`${name} (加载失败，已回滚)`);
+    }
     const successBar = generateProgressBar(100);
     let resultMsg = `🎉 <b>批量安装完成!</b>\n\n${successBar}\n\n📊 <b>安装统计:</b>\n✅ 成功安装: ${installedCount}/${totalPlugins}\n❌ 安装失败: ${failedCount}/${totalPlugins}`;
     if (failedPlugins.length > 0) {
@@ -632,7 +916,11 @@ async function installAllPlugins(msg: Api.Message) {
     }
     resultMsg += `\n\n🔄 插件已重新加载，可以开始使用!`;
 
-    await reloadAndFinalize(statusMsg, resultMsg, { parseMode: "html" });
+    await reloadAndFinalize(statusMsg, resultMsg, {
+      parseMode: "html",
+      reload: async () => reloadResult.recovered,
+      failureText: "❌ 批量安装后的插件加载失败，已恢复安装前文件",
+    });
   } catch (error) {
     await sendOrEditMessage(statusMsg, `❌ 批量安装失败: ${error}`);
     console.error("[TPM] 批量安装插件失败:", error);
@@ -659,6 +947,9 @@ async function installMultiplePlugins(pluginNames: string[], msg: Api.Message) {
     let failedCount = 0;
     const failedPlugins: string[] = [];
     const notFoundPlugins: string[] = [];
+    const db = await getDatabase();
+    const previousDb = { ...db.data };
+    const snapshots: PluginFileSnapshot[] = [];
 
     await sendOrEditMessage(statusMsg, `📦 开始安装 ${totalPlugins} 个插件...\n\n🔄 进度: 0/${totalPlugins} (0%)`, { parseMode: "html" });
 
@@ -668,6 +959,7 @@ async function installMultiplePlugins(pluginNames: string[], msg: Api.Message) {
       const progressBar = htmlEscape(generateProgressBar(progress));
 
       try {
+        assertValidPluginName(pluginName);
         if ([0, pluginNames.length - 1].includes(i) || i % 2 === 0) {
           await sendOrEditMessage(statusMsg, `📦 正在安装插件: ${codeTag(pluginName)}\n\n${progressBar}\n🔄 进度: ${
               i + 1
@@ -697,43 +989,15 @@ async function installMultiplePlugins(pluginNames: string[], msg: Api.Message) {
           continue;
         }
 
-        const filePath = path.join(PLUGIN_PATH, `${pluginName}.ts`);
-        const oldBackupPath = path.join(PLUGIN_PATH, `${pluginName}.ts.backup`);
-
-        if (fs.existsSync(filePath)) {
-          const cacheDir = createDirectoryInTemp("plugin_backups");
-          const timestamp = new Date()
-            .toISOString()
-            .replace(/[:.]/g, "-")
-            .slice(0, -5);
-          const backupPath = path.join(
-            cacheDir,
-            `${pluginName}_${timestamp}.ts`
-          );
-          fs.copyFileSync(filePath, backupPath);
-          console.log(`[TPM] 旧插件已转移到缓存: ${backupPath}`);
-        }
-
-        if (fs.existsSync(oldBackupPath)) {
-          fs.unlinkSync(oldBackupPath);
-          console.log(`[TPM] 已清理旧备份文件: ${oldBackupPath}`);
-        }
-
-        fs.writeFileSync(filePath, response.data);
-
-        try {
-          const db = await getDatabase();
-          db.data[pluginName] = {
-            url: pluginUrl,
-            desc: pluginData.desc,
-            _updatedAt: Date.now(),
-            _contentHash: hashPluginContent(response.data),
-          };
-          await db.write();
-          console.log(`[TPM] 已记录插件信息到数据库: ${pluginName}`);
-        } catch (dbError) {
-          console.error(`[TPM] 记录插件信息失败: ${dbError}`);
-        }
+        const snapshot = writePluginAtomically(pluginName, response.data);
+        snapshots.push(snapshot);
+        db.data[pluginName] = {
+          url: pluginUrl,
+          desc: pluginData.desc,
+          _updatedAt: Date.now(),
+          _contentHash: hashPluginContent(response.data),
+          _baseline: "trusted",
+        };
 
         installedCount++;
         await lifecycleDelay(100, "tpm:batch-install-throttle");
@@ -744,6 +1008,13 @@ async function installMultiplePlugins(pluginNames: string[], msg: Api.Message) {
       }
     }
 
+    await persistPluginMutations(snapshots, db, previousDb);
+    const reloadResult = await reloadWithRollback(snapshots, db, previousDb);
+    for (const name of reloadResult.failedNames) {
+      installedCount = Math.max(0, installedCount - 1);
+      failedCount++;
+      failedPlugins.push(`${name} (加载失败，已回滚)`);
+    }
     const successBar = generateProgressBar(100);
     let resultMsg = `🎉 <b>批量安装完成!</b>\n\n${successBar}\n\n📊 <b>安装统计:</b>\n✅ 成功安装: ${installedCount}/${totalPlugins}\n❌ 安装失败: ${failedCount}/${totalPlugins}`;
 
@@ -767,7 +1038,11 @@ async function installMultiplePlugins(pluginNames: string[], msg: Api.Message) {
 
     resultMsg += `\n\n🔄 插件已重新加载，可以开始使用!`;
 
-    await reloadAndFinalize(statusMsg, resultMsg, { parseMode: "html" });
+    await reloadAndFinalize(statusMsg, resultMsg, {
+      parseMode: "html",
+      reload: async () => reloadResult.recovered,
+      failureText: "❌ 批量安装后的插件加载失败，已恢复安装前文件",
+    });
   } catch (error) {
     await sendOrEditMessage(statusMsg, `❌ 批量安装失败: ${error}`);
     console.error("[TPM] 批量安装插件失败:", error);
@@ -787,57 +1062,71 @@ async function installPlugin(args: string[], msg: Api.Message) {
       const replied = await safeGetReplyMessage(msg);
       if (replied?.media) {
         const fileName = await getMediaFileName(replied);
-        
-        if (!fileName.endsWith(".ts")) {
+        if (typeof fileName !== "string" || !fileName.endsWith(".ts")) {
           await sendOrEditMessage(msg, `❌ 文件格式错误\n文件不是有效插件`);
           return;
         }
-        
-        const pluginName = fileName.replace(".ts", "");
-        const statusMsg = await sendOrEditMessage(msg, `🔍 正在验证插件 ${pluginName} ...`);
-        const filePath = path.join(PLUGIN_PATH, fileName);
-
-        await msg.client?.downloadMedia(replied, { outputFile: filePath });
-        
+        const pluginName = fileName.slice(0, -3);
+        let tempPath: string | null = null;
         try {
-          const pluginModule = require(filePath);
+          assertValidPluginName(pluginName);
+          const filePath = resolvePluginFilePath(pluginName);
+          const statusMsg = await sendOrEditMessage(
+            msg,
+            `🔍 正在验证插件 ${pluginName} ...`,
+          );
+          tempPath = path.join(
+            createDirectoryInTemp("plugin_uploads"),
+            `_${pluginName}.${process.pid}.${randomBytes(8).toString("hex")}.tmp.ts`,
+          );
+          await msg.client?.downloadMedia(replied, { outputFile: tempPath });
+          if (!fs.existsSync(tempPath) || fs.lstatSync(tempPath).isSymbolicLink()) {
+            throw new Error("插件下载未生成普通文件");
+          }
+
+          const pluginModule = require(tempPath);
           const pluginInstance = pluginModule.default || pluginModule;
-          
           if (!isValidPlugin(pluginInstance)) {
-            if (fs.existsSync(filePath)) {
-              fs.unlinkSync(filePath);
-            }
-            await sendOrEditMessage(statusMsg, `❌ 插件验证失败\n文件不是有效插件`);
-            return;
+            throw new Error("文件不是有效插件");
           }
-        } catch (error) {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
-          await sendOrEditMessage(statusMsg, `❌ 插件加载失败\n错误信息:\n${error instanceof Error ? error.message : String(error)}`);
-          return;
-        }
+          delete require.cache[require.resolve(tempPath)];
 
-        await sendOrEditMessage(statusMsg, `✅ 验证通过，正在安装插件 ${pluginName} ...`);
+          const snapshot = writePluginAtomically(
+            pluginName,
+            fs.readFileSync(tempPath, "utf8"),
+          );
+          fs.unlinkSync(tempPath);
+          tempPath = null;
 
-        let overrideMessage = "";
-        try {
           const db = await getDatabase();
-          if (db.data[pluginName]) {
-            delete db.data[pluginName];
-            await db.write();
-            overrideMessage = `\n⚠️ 已覆盖之前已安装的远程插件\n若需保持更新, 请 ${codeTag(`${mainPrefix}tpm i ${pluginName}`)}`;
-            console.log(`[TPM] 已从数据库中清除同名插件记录: ${pluginName}`);
-          }
-        } catch (error) {
-          console.error(`[TPM] 清除数据库记录失败: ${error}`);
-        }
+          const previousDb = { ...db.data };
+          const overrideMessage = db.data[pluginName]
+            ? `\n⚠️ 已覆盖之前已安装的远程插件\n若需保持更新, 请 ${codeTag(`${mainPrefix}tpm i ${pluginName}`)}`
+            : "";
+          delete db.data[pluginName];
+          await persistPluginMutations([snapshot], db, previousDb);
 
-        await reloadAndFinalize(
-          statusMsg,
-          `✅ 插件 ${htmlEscape(pluginName)} 已安装并加载成功${overrideMessage}`,
-          { parseMode: "html" }
-        );
+          await reloadAndFinalize(
+            statusMsg,
+            `✅ 插件 ${htmlEscape(pluginName)} 已安装并加载成功${overrideMessage}`,
+            {
+              parseMode: "html",
+              reload: async () =>
+                (await reloadWithRollback([snapshot], db, previousDb)).ok,
+              failureText: `❌ 插件 ${htmlEscape(pluginName)} 加载失败，已恢复安装前文件`,
+            },
+          );
+        } catch (error) {
+          if (tempPath && fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+          }
+          await sendOrEditMessage(
+            msg,
+            `❌ 插件安装失败\n错误信息:\n${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       } else {
         await sendOrEditMessage(msg, "请回复一个插件文件");
       }
@@ -863,25 +1152,28 @@ async function uninstallPlugin(plugin: string, msg: Api.Message) {
     return;
   }
   const statusMsg = await sendOrEditMessage(msg, `正在卸载插件 ${plugin}...`);
-  const pluginPath = path.join(PLUGIN_PATH, `${plugin}.ts`);
-  let finalText: string;
-  if (fs.existsSync(pluginPath)) {
-    fs.unlinkSync(pluginPath);
-    try {
-      const db = await getDatabase();
-      if (db.data[plugin]) {
-        delete db.data[plugin];
-        await db.write();
-        console.log(`[TPM] 已从数据库中删除插件记录: ${plugin}`);
-      }
-    } catch (error) {
-      console.error(`[TPM] 删除插件数据库记录失败: ${error}`);
+  try {
+    assertValidPluginName(plugin);
+    const pluginPath = resolvePluginFilePath(plugin);
+    if (!fs.existsSync(pluginPath)) {
+      await sendOrEditMessage(statusMsg, `未找到插件 ${plugin}`);
+      return;
     }
-    finalText = `插件 ${plugin} 已卸载`;
-  } else {
-    finalText = `未找到插件 ${plugin}`;
+    const db = await getDatabase();
+    const previousDb = { ...db.data };
+    const snapshot = deletePluginFile(plugin);
+    delete db.data[plugin];
+    await persistPluginMutations([snapshot], db, previousDb);
+    await reloadAndFinalize(statusMsg, `插件 ${plugin} 已卸载`, {
+      reload: async () => (await reloadWithRollback([snapshot], db, previousDb)).ok,
+      failureText: `❌ 插件 ${plugin} 卸载后加载失败，已恢复原文件`,
+    });
+  } catch (error) {
+    await sendOrEditMessage(
+      statusMsg,
+      `❌ 卸载失败: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  await reloadAndFinalize(statusMsg, finalText);
 }
 
 async function uninstallMultiplePlugins(
@@ -900,9 +1192,15 @@ async function uninstallMultiplePlugins(
   const statusMsg = await sendOrEditMessage(msg, `开始卸载 ${totalCount} 个插件...\n${generateProgressBar(
       0
     )} 0/${totalCount}`);
+  let dbForRollback: Awaited<ReturnType<typeof getDatabase>> | null = null;
+  let previousDb: Database = {};
+  const snapshots: PluginFileSnapshot[] = [];
+  let reloadRecovered = true;
 
   try {
     const db = await getDatabase();
+    dbForRollback = db;
+    previousDb = { ...db.data };
 
     for (const pluginName of pluginNames) {
       const trimmedName = pluginName.trim();
@@ -915,32 +1213,31 @@ async function uninstallMultiplePlugins(
         processedCount++;
         continue;
       }
-
-      const pluginPath = path.join(PLUGIN_PATH, `${trimmedName}.ts`);
-
-      if (fs.existsSync(pluginPath)) {
-        try {
-          fs.unlinkSync(pluginPath);
+      try {
+        assertValidPluginName(trimmedName);
+        const pluginPath = resolvePluginFilePath(trimmedName);
+        if (fs.existsSync(pluginPath)) {
+          snapshots.push(deletePluginFile(trimmedName));
           if (db.data[trimmedName]) {
             delete db.data[trimmedName];
             console.log(`[TPM] 已从数据库中删除插件记录: ${trimmedName}`);
           }
           results.push({ name: trimmedName, success: true });
-        } catch (error) {
-          console.error(`[TPM] 卸载插件 ${trimmedName} 失败:`, error);
+        } else {
           results.push({
             name: trimmedName,
             success: false,
-            reason: `删除失败: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            reason: "插件不存在",
           });
         }
-      } else {
+      } catch (error) {
+        console.error(`[TPM] 卸载插件 ${trimmedName} 失败:`, error);
         results.push({
           name: trimmedName,
           success: false,
-          reason: "插件不存在",
+          reason: `删除失败: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         });
       }
 
@@ -952,13 +1249,29 @@ async function uninstallMultiplePlugins(
         )} ${processedCount}/${totalCount}\n当前: ${trimmedName}`);
     }
 
-    await db.write();
+    await persistPluginMutations(snapshots, db, previousDb);
   } catch (error) {
     console.error(`[TPM] 批量卸载过程中发生错误:`, error);
     await sendOrEditMessage(msg, `批量卸载过程中发生错误: ${
         error instanceof Error ? error.message : String(error)
       }`);
     return;
+  }
+
+  if (dbForRollback && snapshots.length > 0) {
+    const reloadResult = await reloadWithRollback(
+      snapshots,
+      dbForRollback,
+      previousDb,
+    );
+    reloadRecovered = reloadResult.recovered;
+    for (const name of reloadResult.failedNames) {
+      const result = results.find((item) => item.name === name && item.success);
+      if (result) {
+        result.success = false;
+        result.reason = "插件加载失败，已恢复卸载前文件";
+      }
+    }
   }
 
   const successCount = results.filter((r) => r.success).length;
@@ -982,7 +1295,14 @@ async function uninstallMultiplePlugins(
       .join("\n")}`;
   }
 
-  await reloadAndFinalize(statusMsg, resultText);
+  if (successCount > 0 && dbForRollback) {
+    await reloadAndFinalize(statusMsg, resultText, {
+      reload: async () => reloadRecovered,
+      failureText: "❌ 批量卸载后插件加载失败，已恢复卸载前文件",
+    });
+  } else {
+    await sendOrEditMessage(statusMsg, resultText);
+  }
 }
 
 async function uninstallAllPlugins(msg: Api.Message) {
@@ -991,36 +1311,24 @@ async function uninstallAllPlugins(msg: Api.Message) {
 
     let removed = 0;
     let failed: string[] = [];
+    const db = await getDatabase();
+    const previousDb = { ...db.data };
+    const snapshots: PluginFileSnapshot[] = [];
 
-    try {
-      if (fs.existsSync(PLUGIN_PATH)) {
-        const files = fs.readdirSync(PLUGIN_PATH);
-        for (const file of files) {
-          const full = path.join(PLUGIN_PATH, file);
-          const isPluginTs =
-            file.endsWith(".ts") &&
-            !file.includes("backup") &&
-            !file.endsWith(".d.ts") &&
-            !file.startsWith("_");
-          if (!isPluginTs) continue;
-          try {
-            fs.unlinkSync(full);
-            removed++;
-          } catch (e) {
-            failed.push(file);
-          }
-        }
+    for (const name of listLocalPluginNames()) {
+      try {
+        snapshots.push(deletePluginFile(name));
+        removed++;
+      } catch {
+        failed.push(`${name}.ts`);
       }
-    } catch (e) {
-      console.error("[TPM] 扫描插件目录失败:", e);
     }
-
-    try {
-      const db = await getDatabase();
-      for (const k of Object.keys(db.data)) delete db.data[k];
-      await db.write();
-    } catch (e) {
-      console.error("[TPM] 清空数据库失败:", e);
+    for (const k of Object.keys(db.data)) delete db.data[k];
+    await persistPluginMutations(snapshots, db, previousDb);
+    const reloadResult = await reloadWithRollback(snapshots, db, previousDb);
+    for (const name of reloadResult.failedNames) {
+      removed = Math.max(0, removed - 1);
+      failed.push(`${name}.ts`);
     }
 
     let text = `✅ 已清空插件目录并刷新缓存\n\n🗑 删除文件: ${removed}`;
@@ -1030,7 +1338,11 @@ async function uninstallAllPlugins(msg: Api.Message) {
         failed.length > 10 ? `\n• ... 还有 ${failed.length - 10} 个失败` : ""
       }`;
     }
-    await reloadAndFinalize(statusMsg, text, { parseMode: "html" });
+    await reloadAndFinalize(statusMsg, text, {
+      parseMode: "html",
+      reload: async () => reloadResult.recovered,
+      failureText: "❌ 清空插件后加载失败，已恢复原插件文件",
+    });
   } catch (error) {
     console.error("[TPM] 清空插件目录失败:", error);
     await sendOrEditMessage(msg, `❌ 清空插件目录失败: ${error}`);
@@ -1043,9 +1355,14 @@ async function uploadPlugin(args: string[], msg: Api.Message) {
     await sendOrEditMessage(msg, "请提供插件名称");
     return;
   }
-  const pluginPath = path.join(PLUGIN_PATH, `${pluginName}.ts`);
-  if (!fs.existsSync(pluginPath)) {
-    await sendOrEditMessage(msg, `未找到插件 ${pluginName}`);
+  let pluginPath: string;
+  try {
+    pluginPath = resolvePluginFilePath(pluginName, { mustExist: true });
+  } catch (error) {
+    await sendOrEditMessage(
+      msg,
+      `❌ 无法上传插件: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return;
   }
   
@@ -1086,14 +1403,7 @@ async function search(msg: Api.Message) {
 
     const localPlugins = new Set<string>();
     try {
-      if (fs.existsSync(PLUGIN_PATH)) {
-        const files = fs.readdirSync(PLUGIN_PATH);
-        files.forEach((file) => {
-          if (file.endsWith(".ts") && !file.includes("backup")) {
-            localPlugins.add(file.replace(".ts", ""));
-          }
-        });
-      }
+      for (const name of listLocalPluginNames()) localPlugins.add(name);
     } catch (error) {
       console.error("[TPM] 读取本地插件失败:", error);
     }
@@ -1150,12 +1460,12 @@ async function search(msg: Api.Message) {
       const hasLocal = localPlugins.has(pluginName);
       const dbRecord = dbPlugins[pluginName];
 
-      if (hasLocal && dbRecord) {
+      if (hasLocal && dbRecord && dbRecord._baseline !== "unknown") {
         installedCount++;
         return { status: "✅", label: "已安装" } as const;
-      } else if (hasLocal && !dbRecord) {
+      } else if (hasLocal) {
         localOnlyCount++;
-        return { status: "🔶", label: "本地同名" } as const;
+        return { status: "🔶", label: "本地/未纳管" } as const;
       } else {
         notInstalledCount++;
         return { status: "❌", label: "未安装" } as const;
@@ -1231,23 +1541,7 @@ async function showPluginRecords(msg: Api.Message, verbose?: boolean) {
     await rebuildPluginDb(db);
     const dbNames = Object.keys(db.data);
 
-    let filePlugins: string[] = [];
-    try {
-      if (fs.existsSync(PLUGIN_PATH)) {
-        filePlugins = fs
-          .readdirSync(PLUGIN_PATH)
-          .filter(
-            (f) =>
-              f.endsWith(".ts") &&
-              !f.includes("backup") &&
-              !f.endsWith(".d.ts") &&
-              !f.startsWith("_")
-          )
-          .map((f) => f.replace(/\.ts$/, ""));
-      }
-    } catch (err) {
-      console.error("[TPM] 读取本地插件目录失败:", err);
-    }
+    const filePlugins = listLocalPluginNames();
 
     const notInDb = filePlugins.filter((n) => !dbNames.includes(n));
 
@@ -1300,7 +1594,7 @@ async function showPluginRecords(msg: Api.Message, verbose?: boolean) {
       const nameTag = allowCodeTag ? codeTag(name) : htmlEscape(name);
       
       if (verbose) {
-        const filePath = path.join(PLUGIN_PATH, `${name}.ts`);
+        const filePath = resolvePluginFilePath(name);
         let mtime = "未知";
         try {
           const stat = fs.statSync(filePath);
@@ -1366,6 +1660,13 @@ export async function updateAllPlugins(
   msg: Api.Message,
   opts?: { silent?: boolean; force?: boolean },
 ): Promise<{ failedCount: number; statusPeerId?: any; statusMsgId?: number }> {
+  return withPluginOperationLock(() => updateAllPluginsUnlocked(msg, opts));
+}
+
+async function updateAllPluginsUnlocked(
+  msg: Api.Message,
+  opts?: { silent?: boolean; force?: boolean },
+): Promise<{ failedCount: number; statusPeerId?: any; statusMsgId?: number }> {
   const silent = !!opts?.silent;
   const force = !!opts?.force;
   // silent: skip all progress UI (auto-update path); still need msg for reload peer if any
@@ -1377,6 +1678,8 @@ export async function updateAllPlugins(
   
   try {
     const db = await getDatabase();
+    const previousDb = { ...db.data };
+    const snapshots: PluginFileSnapshot[] = [];
     await rebuildPluginDb(db);
     const dbPlugins = Object.keys(db.data);
 
@@ -1410,6 +1713,7 @@ export async function updateAllPlugins(
       const progressBar = htmlEscape(generateProgressBar(progress));
 
       try {
+        assertValidPluginName(pluginName);
         if (canEdit && ([0, dbPlugins.length - 1].includes(i) || i % 2 === 0)) {
           canEdit = await updateProgressMessage(statusMsg, `📦 正在更新插件: ${codeTag(pluginName)}\n\n${progressBar}\n🔄 进度: ${
               i + 1
@@ -1432,7 +1736,7 @@ export async function updateAllPlugins(
           continue;
         }
 
-        const filePath = path.join(PLUGIN_PATH, `${pluginName}.ts`);
+        const filePath = resolvePluginFilePath(pluginName);
 
         if (!fs.existsSync(filePath)) {
           skipCount++;
@@ -1447,12 +1751,8 @@ export async function updateAllPlugins(
 
         if (localHash === remoteHash) {
           if (pluginRecord._contentHash !== localHash) {
-            try {
-              db.data[pluginName]._contentHash = localHash;
-              await db.write();
-            } catch (dbError) {
-              console.error(`[TPM] 同步插件 hash 失败: ${dbError}`);
-            }
+            db.data[pluginName]._contentHash = localHash;
+            db.data[pluginName]._baseline = "trusted";
           }
           skipCount++;
           console.log(`[TPM] 跳过更新插件 ${pluginName}: 内容无变化`);
@@ -1465,25 +1765,12 @@ export async function updateAllPlugins(
           continue;
         }
 
-        const cacheDir = createDirectoryInTemp("plugin_backups");
-        const timestamp = new Date()
-          .toISOString()
-          .replace(/[:.]/g, "-")
-          .slice(0, -5);
-        const backupPath = path.join(cacheDir, `${pluginName}_${timestamp}.ts`);
-        fs.copyFileSync(filePath, backupPath);
-        console.log(`[TPM] 旧版本已备份到: ${backupPath}`);
+        const snapshot = writePluginAtomically(pluginName, remoteContent);
+        snapshots.push(snapshot);
 
-        fs.writeFileSync(filePath, remoteContent);
-
-        try {
-          db.data[pluginName]._updatedAt = Date.now();
-          db.data[pluginName]._contentHash = remoteHash;
-          await db.write();
-          console.log(`[TPM] 已更新插件数据库记录: ${pluginName}`);
-        } catch (dbError) {
-          console.error(`[TPM] 更新插件数据库记录失败: ${dbError}`);
-        }
+        db.data[pluginName]._updatedAt = Date.now();
+        db.data[pluginName]._contentHash = remoteHash;
+        db.data[pluginName]._baseline = "trusted";
 
         updatedCount++;
         await lifecycleDelay(100, "tpm:update-throttle");
@@ -1494,6 +1781,19 @@ export async function updateAllPlugins(
       }
     }
 
+    await persistPluginMutations(snapshots, db, previousDb);
+
+    let reloadRecovered = true;
+    if (updatedCount > 0) {
+      const reloadResult = await reloadWithRollback(snapshots, db, previousDb);
+      reloadRecovered = reloadResult.recovered;
+      for (const name of reloadResult.failedNames) {
+        updatedCount = Math.max(0, updatedCount - 1);
+        failedCount++;
+        failedPlugins.push(`${name} (加载失败，已回滚)`);
+      }
+    }
+
     if (updatedCount === 0 && silent) {
       // Nothing changed: skip full reload to avoid crash from
       // unreferenced rejections during disposeRuntime.
@@ -1501,7 +1801,7 @@ export async function updateAllPlugins(
       const skipPeerId =
         statusMsg.chatId != null ? String(statusMsg.chatId) : statusMsg.peerId;
       const skipMsgId = statusMsg.id;
-      return { failedCount: 0, statusPeerId: skipPeerId, statusMsgId: skipMsgId };
+      return { failedCount, statusPeerId: skipPeerId, statusMsgId: skipMsgId };
     }
 
     const finalText = `✅ 更新完成 (成功${updatedCount}个, 跳过${skipCount}个, 失败${failedCount}个)`;
@@ -1509,16 +1809,17 @@ export async function updateAllPlugins(
       statusMsg.chatId != null ? String(statusMsg.chatId) : statusMsg.peerId;
     const statusMsgId = statusMsg.id;
     if (silent) {
-      if (updatedCount > 0) {
-        try {
-          const { loadPlugins } = require("@utils/pluginManager");
-          await loadPlugins();
-        } catch (e) {
-          console.error("[TPM] silent reload failed:", e);
-        }
-      }
+      // Reload already completed above so selective failures could be rolled back.
     } else {
-      await reloadAndFinalize(statusMsg, finalText, { parseMode: "html" });
+      const loaded = await reloadAndFinalize(statusMsg, finalText, {
+        parseMode: "html",
+        reload: async () => reloadRecovered,
+        failureText: "❌ 插件更新后加载失败，已恢复更新前文件",
+      });
+      if (!loaded) {
+        failedCount += updatedCount;
+        updatedCount = 0;
+      }
     }
     console.log(`[TPM] 更新完成。统计: 成功${updatedCount}个, 跳过${skipCount}个, 失败${failedCount}个`);
     return { failedCount, statusPeerId, statusMsgId };
@@ -1554,30 +1855,37 @@ async function handleSourceCommand(args: string[], msg: Api.Message): Promise<vo
       await sendOrEditMessage(msg, "❌ 请提供 GitHub 仓库地址\n如: <code>tpm source add https://github.com/xxx/xxx</code>", { parseMode: "html" });
       return;
     }
-    try {
-      new URL(url);
-    } catch {
-      await sendOrEditMessage(msg, "❌ URL 格式无效");
-      return;
-    }
-    await setCustomSourceConfig(url);
+    const previousCfg = await getCustomSourceConfig();
     const statusMsg = await sendOrEditMessage(msg, "🔍 正在验证自定义插件源...");
     try {
       const rawUrl = convertGithubToRawPluginUrl(url);
-      const test = await fetchWithRetry(rawUrl, { timeout: 10000 });
+      const test = await fetchWithRetry<RemotePluginsIndex>(rawUrl, { timeout: 10000 });
       if (test.status !== 200) {
-        await clearCustomSourceConfig();
         await sendOrEditMessage(statusMsg, `❌ 自定义插件源验证失败（HTTP ${test.status}）\n请确保仓库包含 plugins.json`);
         return;
       }
-      const pluginCount = Object.keys(test.data || {}).length;
+      const validated = validateRemotePluginsIndex(test.data, "自定义源");
+      await setCustomSourceConfig(url);
+      const pluginCount = Object.keys(validated).length;
       const repoLink = url.replace(/\/?$/, "");
       await reloadAndFinalize(statusMsg,
         `✅ <b>自定义插件源已设置</b>\n\n🔗 ${codeTag(repoLink)}\n📦 包含 ${pluginCount} 个插件\n\n💡 同名插件将优先使用自定义源版本`,
-        { parseMode: "html" }
+        {
+          parseMode: "html",
+          failureText: "❌ 自定义插件源加载失败，已恢复原配置",
+          reload: async () => {
+            const { loadPlugins } = require("@utils/pluginManager") as typeof import("@utils/pluginManager");
+            if (await loadPlugins()) return true;
+            if (previousCfg) await setCustomSourceConfig(previousCfg.url);
+            else await clearCustomSourceConfig();
+            await loadPlugins();
+            return false;
+          },
+        }
       );
     } catch (error: unknown) {
-      await clearCustomSourceConfig();
+      if (previousCfg) await setCustomSourceConfig(previousCfg.url);
+      else await clearCustomSourceConfig();
       await sendOrEditMessage(statusMsg, `❌ 自定义插件源验证失败: ${error instanceof Error ? error.message : String(error)}\n请确认仓库可访问且包含 plugins.json`);
     }
     return;
@@ -1592,7 +1900,17 @@ async function handleSourceCommand(args: string[], msg: Api.Message): Promise<vo
     await clearCustomSourceConfig();
     await reloadAndFinalize(
       await sendOrEditMessage(msg, "🗑️ 正在清除自定义插件源..."),
-      "✅ 自定义插件源已清除"
+      "✅ 自定义插件源已清除",
+      {
+        failureText: "❌ 清除自定义插件源后加载失败，已恢复原配置",
+        reload: async () => {
+          const { loadPlugins } = require("@utils/pluginManager") as typeof import("@utils/pluginManager");
+          if (await loadPlugins()) return true;
+          await setCustomSourceConfig(cfg.url);
+          await loadPlugins();
+          return false;
+        },
+      },
     );
     return;
   }
@@ -1635,7 +1953,7 @@ class TpmPlugin extends Plugin {
   ignoreEdited: boolean = true;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    tpm: async (msg) => {
+    tpm: async (msg) => withPluginOperationLock(async () => {
       const text = msg.message;
       const [, ...args] = text.split(" ");
       if (args.length === 0) {
@@ -1682,7 +2000,7 @@ class TpmPlugin extends Plugin {
       } else {
         await sendOrEditMessage(msg, `❌ 未知命令: ${codeTag(cmd)}\n\n${this.description}`, { parseMode: "html" });
       }
-    },
+    }),
   };
 }
 
@@ -1693,11 +2011,13 @@ if (require.main === module) {
   if (args.length === 0 || args?.[0] !== "install" || args?.length < 2) {
     console.log("Usage: node tpm.ts install plugin1 plugin2 ...");
   }
-  installPlugin(args, {
-    edit: async ({ text }: any) => {
-      console.log(text);
-    },
-  } as any)
+  withPluginOperationLock(() =>
+    installPlugin(args, {
+      edit: async ({ text }: any) => {
+        console.log(text);
+      },
+    } as any),
+  )
     .then(() => {
       console.log("Plugins processed successfully");
     })

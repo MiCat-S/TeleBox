@@ -1,5 +1,7 @@
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 import { isValidPlugin, Plugin, type PanelSettingsAdapter } from "@utils/pluginBase";
 import { NewMessageEvent, NewMessage } from "teleproto/events";
 import { AliasDB } from "./aliasDB";
@@ -10,6 +12,7 @@ import {
   EditedMessageEvent,
 } from "teleproto/events/EditedMessage";
 import type { TeleBoxRuntime } from "./runtimeManager";
+import { createGenerationContext } from "./generationContext";
 import {
   getCurrentGeneration,
   getGlobalClient,
@@ -32,12 +35,127 @@ type PluginEntry = {
   original?: string;
   aliasFinal?: string;
   plugin: Plugin;
+  sourceFile?: string;
 };
+
+export type PluginLoadFailureStage = "directory" | "require" | "export" | "setup";
+
+export interface PluginLoadFailure {
+  stage: PluginLoadFailureStage;
+  sourceFile: string;
+  pluginName?: string;
+  message: string;
+}
+
+export interface PluginLoadConflict {
+  kind: "command" | "alias" | "cron";
+  key: string;
+  winnerPlugin: string;
+  winnerSourceFile?: string;
+  skippedPlugin: string;
+  skippedSourceFile?: string;
+}
+
+export interface PluginLoadReport {
+  generation: number;
+  loaded: Array<{ pluginName: string; sourceFile: string }>;
+  failures: PluginLoadFailure[];
+  conflicts: PluginLoadConflict[];
+}
 
 const validPlugins: Plugin[] = [];
 const plugins: Map<string, PluginEntry> = new Map();
 const loadedPluginFiles: Set<string> = new Set();
+const pluginSourceFiles = new WeakMap<Plugin, string>();
 let pluginLoadDepth = 0;
+let lastPluginLoadReport: PluginLoadReport = {
+  generation: 0,
+  loaded: [],
+  failures: [],
+  conflicts: [],
+};
+let pluginOperationLock: Promise<unknown> = Promise.resolve();
+const pluginOperationLockStorage = new AsyncLocalStorage<{ active: boolean }>();
+
+export function withPluginOperationLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (pluginOperationLockStorage.getStore()?.active) return fn();
+  const execute = () => {
+    const state = { active: true };
+    return pluginOperationLockStorage.run(state, async () => {
+      try {
+        return await fn();
+      } finally {
+        state.active = false;
+      }
+    });
+  };
+  const run = pluginOperationLock.then(execute, execute);
+  pluginOperationLock = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+export function getLastPluginLoadReport(): PluginLoadReport {
+  return {
+    generation: lastPluginLoadReport.generation,
+    loaded: lastPluginLoadReport.loaded.map((item) => ({ ...item })),
+    failures: lastPluginLoadReport.failures.map((item) => ({ ...item })),
+    conflicts: lastPluginLoadReport.conflicts.map((item) => ({ ...item })),
+  };
+}
+
+export function createPluginLoadReport(generation: number): PluginLoadReport {
+  return { generation, loaded: [], failures: [], conflicts: [] };
+}
+
+export function pluginFailedInReport(
+  report: PluginLoadReport,
+  pluginName: string,
+  pluginRoot?: string,
+): PluginLoadFailure | undefined {
+  const expectedFile = `${pluginName}.ts`;
+  return report.failures.find(
+    (failure) =>
+      path.basename(failure.sourceFile) === expectedFile &&
+      (!pluginRoot ||
+        path.dirname(path.resolve(failure.sourceFile)) === path.resolve(pluginRoot)),
+  );
+}
+
+export function writeJsonFileAtomically(
+  filePath: string,
+  value: unknown,
+): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`,
+  );
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(tempPath, "wx", 0o600);
+    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, filePath);
+    try {
+      const dirFd = fs.openSync(path.dirname(filePath), "r");
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // Directory fsync is unavailable on some platforms; file fsync + rename completed.
+    }
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  }
+}
 
 const USER_PLUGIN_PATH = path.join(process.cwd(), "plugins");
 const DEFAUTL_PLUGIN_PATH = path.join(process.cwd(), "src", "plugin");
@@ -93,6 +211,10 @@ function setPrefixes(newList: string[]): void {
 
 function normalizePath(filePath: string): string {
   return path.resolve(filePath);
+}
+
+function compareStableAscii(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function isProjectFile(filePath: string): boolean {
@@ -162,47 +284,135 @@ function dynamicRequireWithDeps(filePath: string) {
     return require(normalized);
   } catch (err) {
     console.error(`Failed to require ${filePath}:`, err);
-    return null;
+    throw new Error(
+      `Failed to require plugin ${filePath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
 }
 
-async function setPlugins(basePath: string) {
-  const files = fs
-    .readdirSync(basePath)
-    .filter((file) => file.endsWith(".ts"));
+async function setPlugins(
+  basePath: string,
+  report: PluginLoadReport,
+): Promise<void> {
+  let entries: fs.Dirent[];
+  try {
+    const baseStat = fs.lstatSync(basePath);
+    if (baseStat.isSymbolicLink() || !baseStat.isDirectory()) {
+      throw new Error(`Plugin path must be a real directory: ${basePath}`);
+    }
+    entries = fs
+      .readdirSync(basePath, { withFileTypes: true })
+      .sort((a, b) => compareStableAscii(a.name, b.name));
+  } catch (error) {
+    report.failures.push({
+      stage: "directory",
+      sourceFile: basePath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
 
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".ts")) continue;
+    const pluginPath = path.resolve(basePath, entry.name);
+    if (entry.isSymbolicLink()) {
+      report.failures.push({
+        stage: "directory",
+        sourceFile: pluginPath,
+        message: `Refusing symlink plugin: ${pluginPath}`,
+      });
+      continue;
+    }
+    if (
+      !entry.isFile() ||
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.ts$/.test(entry.name)
+    ) {
+      report.failures.push({
+        stage: "directory",
+        sourceFile: pluginPath,
+        message: `Invalid plugin filename: ${entry.name}`,
+      });
+      continue;
+    }
+
+    let mod: unknown;
+    try {
+      mod = dynamicRequireWithDeps(pluginPath);
+    } catch (error) {
+      report.failures.push({
+        stage: "require",
+        sourceFile: pluginPath,
+        pluginName: path.basename(entry.name, ".ts"),
+        message: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    const plugin = (mod as { default?: unknown }).default ?? mod;
+    if (!isValidPlugin(plugin)) {
+      report.failures.push({
+        stage: "export",
+        sourceFile: pluginPath,
+        pluginName: path.basename(entry.name, ".ts"),
+        message: `Invalid plugin export: ${pluginPath}`,
+      });
+      continue;
+    }
+    if (!plugin.name) plugin.name = path.basename(entry.name, ".ts");
+    pluginSourceFiles.set(plugin, pluginPath);
+    validPlugins.push(plugin);
+  }
+}
+
+function registerPluginCommands(report: PluginLoadReport): void {
   const aliasDB = new AliasDB();
   const aliasList = aliasDB.list();
   aliasDB.close();
 
-  for await (const file of files) {
-    const pluginPath = path.resolve(basePath, file);
-    const mod = dynamicRequireWithDeps(pluginPath);
-    if (!mod) continue;
-    const plugin = mod.default;
-
-    if (isValidPlugin(plugin)) {
-      if (!plugin.name) {
-        plugin.name = path.basename(file, ".ts");
-      }
-
-      validPlugins.push(plugin);
-      const cmds = Object.keys(plugin.cmdHandlers);
-
-      for (const cmd of cmds) {
-        plugins.set(cmd, { plugin });
-
-        const relatedAliases = aliasList.filter(
-          (rec) => rec.final === cmd || rec.final.startsWith(cmd + " ")
+  for (const plugin of validPlugins) {
+    const sourceFile = pluginSourceFiles.get(plugin);
+    for (const cmd of Object.keys(plugin.cmdHandlers).sort(compareStableAscii)) {
+      const existing = plugins.get(cmd);
+      if (existing) {
+        const conflict: PluginLoadConflict = {
+          kind: "command",
+          key: cmd,
+          winnerPlugin: existing.plugin.name || "unknown",
+          winnerSourceFile: existing.sourceFile,
+          skippedPlugin: plugin.name || "unknown",
+          skippedSourceFile: sourceFile,
+        };
+        report.conflicts.push(conflict);
+        console.warn(
+          `[RELOAD] Command conflict "${cmd}": keeping ${conflict.winnerPlugin} (${conflict.winnerSourceFile || "unknown"}), skipping ${conflict.skippedPlugin} (${conflict.skippedSourceFile || "unknown"}).`,
         );
+        continue;
+      }
+      plugins.set(cmd, { plugin, sourceFile });
 
-        for (const rec of relatedAliases) {
-          plugins.set(rec.original, {
-            plugin,
-            original: cmd,
-            aliasFinal: rec.final,
+      const relatedAliases = aliasList.filter(
+        (rec) => rec.final === cmd || rec.final.startsWith(cmd + " "),
+      );
+      for (const rec of relatedAliases) {
+        const existingAlias = plugins.get(rec.original);
+        if (existingAlias) {
+          report.conflicts.push({
+            kind: "alias",
+            key: rec.original,
+            winnerPlugin: existingAlias.plugin.name || "unknown",
+            winnerSourceFile: existingAlias.sourceFile,
+            skippedPlugin: plugin.name || "unknown",
+            skippedSourceFile: sourceFile,
           });
+          continue;
         }
+        plugins.set(rec.original, {
+          plugin,
+          original: cmd,
+          aliasFinal: rec.final,
+          sourceFile,
+        });
       }
     }
   }
@@ -369,15 +579,29 @@ console.log(
 
 async function runPluginSetup(plugin: Plugin, runtime: TeleBoxRuntime): Promise<void> {
   if (typeof plugin.setup !== "function") return;
-  await runtime.context.runTask(
+  const pluginLifecycle = createGenerationContext(runtime.generation);
+  try {
+    await runtime.context.runTask(
+      async () => {
+        await plugin.setup?.({
+          generation: runtime.generation,
+          signal: pluginLifecycle.signal,
+          lifecycle: pluginLifecycle,
+        });
+      },
+      { label: `plugin-setup:${plugin.name || "unknown"}` },
+    );
+  } catch (error) {
+    pluginLifecycle.abort(`Plugin setup failed: ${plugin.name || "unknown"}`);
+    await pluginLifecycle.dispose();
+    throw error;
+  }
+  runtime.context.trackDisposable(
     async () => {
-      await plugin.setup?.({
-        generation: runtime.generation,
-        signal: runtime.signal,
-        lifecycle: runtime.context,
-      });
+      pluginLifecycle.abort(`Plugin unload: ${plugin.name || "unknown"}`);
+      await pluginLifecycle.dispose();
     },
-    { label: `plugin-setup:${plugin.name || "unknown"}` }
+    { label: `plugin-lifecycle:${plugin.name || "unknown"}` },
   );
 }
 
@@ -455,18 +679,38 @@ function dealListenMessagePlugin(runtime: TeleBoxRuntime): void {
   }
 }
 
-function dealCronPlugin(runtime: TeleBoxRuntime): void {
+function dealCronPlugin(
+  runtime: TeleBoxRuntime,
+  report: PluginLoadReport,
+): void {
+  const cronOwners = new Map<string, Plugin>();
   for (const plugin of validPlugins) {
     const cronTasks = plugin.cronTasks;
     if (cronTasks) {
-      const keys = Object.keys(cronTasks);
+      const keys = Object.keys(cronTasks).sort(compareStableAscii);
       for (const key of keys) {
         const cronTask = cronTasks[key];
+        if (cronManager.has(key)) {
+          const winner = cronOwners.get(key);
+          report.conflicts.push({
+            kind: "cron",
+            key,
+            winnerPlugin: winner?.name || "unknown",
+            winnerSourceFile: winner ? pluginSourceFiles.get(winner) : undefined,
+            skippedPlugin: plugin.name || "unknown",
+            skippedSourceFile: pluginSourceFiles.get(plugin),
+          });
+          console.warn(
+            `[RELOAD] Cron conflict "${key}" from plugin ${plugin.name || "unknown"}; keeping the task registered first.`,
+          );
+          continue;
+        }
         cronManager.set(key, cronTask.cron, async () => {
           if (runtime.signal.aborted || runtime.generation !== getCurrentGeneration()) return;
           const client = await getGlobalClient();
           await cronTask.handler(client as never);
         }, runtime.context);
+        if (cronManager.has(key)) cronOwners.set(key, plugin);
       }
     }
   }
@@ -485,6 +729,39 @@ async function runPluginCleanup(plugin: Plugin, runtime: TeleBoxRuntime): Promis
   } catch (error) {
     console.error(`[RELOAD] Plugin cleanup failed: ${plugin.name || "unknown"}`, error);
   }
+}
+
+export async function runPluginSetupsForReport(
+  candidates: Plugin[],
+  runtime: TeleBoxRuntime,
+  report: PluginLoadReport,
+): Promise<Plugin[]> {
+  const successful: Plugin[] = [];
+  for (const plugin of candidates) {
+    const sourceFile =
+      pluginSourceFiles.get(plugin) ?? `<in-memory:${plugin.name || "unknown"}>`;
+    try {
+      await runPluginSetup(plugin, runtime);
+      successful.push(plugin);
+      report.loaded.push({
+        pluginName: plugin.name || path.basename(sourceFile, ".ts"),
+        sourceFile,
+      });
+    } catch (error) {
+      report.failures.push({
+        stage: "setup",
+        sourceFile,
+        pluginName: plugin.name || path.basename(sourceFile, ".ts"),
+        message: error instanceof Error ? error.message : String(error),
+      });
+      console.error(
+        `[RELOAD] Plugin setup failed: ${plugin.name || "unknown"}; plugin disabled for this generation.`,
+        error,
+      );
+      await runPluginCleanup(plugin, runtime);
+    }
+  }
+  return successful;
 }
 
 async function unloadPluginsForRuntime(runtime: TeleBoxRuntime) {
@@ -512,29 +789,23 @@ async function unloadPluginsForRuntime(runtime: TeleBoxRuntime) {
 }
 
 async function loadPluginsForRuntime(runtime: TeleBoxRuntime) {
+  const report = createPluginLoadReport(runtime.generation);
   pluginLoadDepth++;
   try {
-    await setPlugins(USER_PLUGIN_PATH);
-    await setPlugins(DEFAUTL_PLUGIN_PATH);
+    await setPlugins(USER_PLUGIN_PATH, report);
+    await setPlugins(DEFAUTL_PLUGIN_PATH, report);
   } finally {
     pluginLoadDepth--;
   }
 
-  // Isolate setup failures: a single plugin setup() throwing must NOT prevent
-  // subsequent plugins from being initialized. Otherwise plugins later in the
-  // load order keep their cmdHandlers registered (setPlugins already populated
-  // the `plugins` map) but never receive their lifecycle, so invoking them
-  // raises "lifecycle is not initialized" until the next reload.
-  for (const plugin of validPlugins) {
-    try {
-      await runPluginSetup(plugin, runtime);
-    } catch (error) {
-      console.error(
-        `[RELOAD] Plugin setup failed: ${plugin.name || "unknown"} (continuing with remaining plugins)`,
-        error
-      );
-    }
-  }
+  const successful = await runPluginSetupsForReport(
+    [...validPlugins],
+    runtime,
+    report,
+  );
+  validPlugins.length = 0;
+  validPlugins.push(...successful);
+  registerPluginCommands(report);
 
   const { client } = runtime;
   trackClientEventHandler<NewMessageEvent>(
@@ -550,7 +821,13 @@ async function loadPluginsForRuntime(runtime: TeleBoxRuntime) {
     "root:edited-message"
   );
   dealListenMessagePlugin(runtime);
-  dealCronPlugin(runtime);
+  dealCronPlugin(runtime, report);
+  lastPluginLoadReport = report;
+  if (report.failures.length > 0 || report.conflicts.length > 0) {
+    console.warn(
+      `[RELOAD] Plugin load report: loaded=${report.loaded.length} failures=${report.failures.length} conflicts=${report.conflicts.length}`,
+    );
+  }
   console.log(`[RELOAD] Event handlers registered after reload`);
 }
 

@@ -77,8 +77,9 @@ export async function reloadAndFinalize(
   finalText: string,
   options?: MessageEditOptions & {
     reload?: () => Promise<unknown>;
+    failureText?: string;
   },
-): Promise<void> {
+): Promise<boolean> {
   const targetPeerId = statusMsg.peerId;
   const targetMsgId = statusMsg.id;
   const reload =
@@ -88,11 +89,20 @@ export async function reloadAndFinalize(
       return loadPlugins();
     });
 
+  let reloadSucceeded = true;
   try {
-    await reload();
+    const result = await reload();
+    if (result === false) {
+      throw new Error("Plugin reload returned false");
+    }
   } catch (error) {
+    reloadSucceeded = false;
     console.error("[MSG] reload failed before finalize:", error);
   }
+
+  const text = reloadSucceeded
+    ? finalText
+    : options?.failureText ?? "❌ 插件重新加载失败，操作未生效";
 
   try {
     const freshClient = (await getGlobalClient()) as {
@@ -104,13 +114,14 @@ export async function reloadAndFinalize(
     const peer = normalizeDeletePeer(targetPeerId) ?? targetPeerId;
     await freshClient.editMessage(peer, {
       message: targetMsgId,
-      text: finalText,
+      text,
       parseMode: options?.parseMode,
       linkPreview: options?.linkPreview !== false,
     });
   } catch (error) {
     console.log(`[MSG] final status edit failed (post-reload): ${error}`);
   }
+  return reloadSucceeded;
 }
 
 /**
