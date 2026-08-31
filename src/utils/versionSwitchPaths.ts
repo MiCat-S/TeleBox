@@ -1404,9 +1404,10 @@ export function pm2StartEdition(
   }
   // Also drop mis-pointed "telebox" if starting mtcute from old flat cwd, etc.
   const command = "exec node scripts/run-tsx.cjs ./src/index.ts";
-  // mtcute: heap=512MB + RSS threshold=768MB → PM2 restart at 768M
-  // teleproto: heap=512MB + RSS threshold=512MB → PM2 restart at 512M
-  const maxMemRestart = version === "mtcute" ? "768M" : "512M";
+  // run-tsx replaces itself with the real Node runtime, so PM2 now observes
+  // the full process RSS. Keep 768M as a last-resort ceiling for both editions;
+  // the in-process memory plugin handles lower soft thresholds without loops.
+  const maxMemRestart = "768M";
   // Sanitize NODE_OPTIONS: the controller may be spawned from the peer
   // edition's PM2 process tree (setsid detach) and inherit its V8 tuning
   // (e.g. mtcute's --max-semi-space-size=128). PM2 bakes the inherited

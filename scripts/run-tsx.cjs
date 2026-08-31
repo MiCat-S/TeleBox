@@ -73,9 +73,28 @@ if (!fs.existsSync(path.join(cacheDir, 'cjs-helpers.js'))) {
   }
 }
 
-const r = spawnSync(
-  process.execPath,
-  ['-r', 'tsconfig-paths/register', '-r', esbuildRegister, ...entryArgs],
-  { cwd: root, env, stdio: 'inherit' }
-);
+const runtimeArgs = [
+  '-r',
+  'tsconfig-paths/register',
+  '-r',
+  esbuildRegister,
+  ...entryArgs,
+];
+
+// Node 24 provides process.execve(): replace this launcher instead of keeping
+// another V8 process alive for the entire TeleBox lifetime. This also lets PM2
+// monitor the real runtime RSS rather than a lightweight npm/launcher parent.
+if (typeof process.execve === 'function') {
+  try {
+    process.execve(process.execPath, [process.execPath, ...runtimeArgs], env);
+  } catch (error) {
+    console.error('[run-tsx] execve failed, falling back to child process:', error);
+  }
+}
+
+const r = spawnSync(process.execPath, runtimeArgs, {
+  cwd: root,
+  env,
+  stdio: 'inherit',
+});
 process.exit(r.status === null ? 1 : r.status);

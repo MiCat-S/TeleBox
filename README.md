@@ -201,7 +201,7 @@ abstract class Plugin {
 ```bash
 git clone https://github.com/MiCat-S/TeleBox.git ~/telebox
 cd ~/telebox && npm install && npm start
-# 生产环境建议：pm2 start "npm start" --name telebox
+# 生产环境建议：pm2 start ecosystem.config.cjs
 ```
 
 ### 常用命令

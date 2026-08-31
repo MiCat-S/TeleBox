@@ -192,8 +192,8 @@ npm install -g pm2
 **🚀 启动 TeleBox 服务：**
 
 ```bash
-# 使用 PM2 启动服务
-pm2 start "npm start" --name telebox
+# 直接托管 TeleBox Node 运行时，避免 npm/sh 启动外壳常驻
+pm2 start ecosystem.config.cjs
 
 # 保存 PM2 配置
 pm2 save
