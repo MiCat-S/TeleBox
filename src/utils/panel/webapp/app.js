@@ -413,31 +413,30 @@
 
     setProgress("正在连接更新服务…");
 
-    // Connect via SSE
     const url = API + "/tpm/update/stream";
-    const es = new EventSource(url + "?token=" + encodeURIComponent(TOKEN));
+    const streamAbortController = new AbortController();
+    let streamFinished = false;
+    const closeProgress = () => {
+      if (!streamFinished) {
+        streamAbortController.abort();
+        toast("进度连接已关闭，更新仍在后台进行");
+      }
+      overlay.remove();
+    };
+    const abortOnPageHide = () => streamAbortController.abort();
 
-    // Since we need auth, send token as query param
-    // Actually, EventSource doesn't support custom headers, so we need a different approach:
-    // Use fetch with GET + Authorization header, then read the stream
-    // Let's use fetch-based SSE reader instead
-
-    // Close the EventSource experiment, use fetch
-    es.close();
-
-    // Use fetch-based SSE
-    let lines = [];
-    let currentEvent = "";
+    document.getElementById("update-progress-close").onclick = closeProgress;
+    overlay.onclick = (e) => { if (e.target === overlay) closeProgress(); };
+    window.addEventListener("pagehide", abortOnPageHide, { once: true });
 
     fetch(url, {
-      headers: { "Authorization": "Bearer " + TOKEN }
+      headers: { "Authorization": "Bearer " + TOKEN },
+      signal: streamAbortController.signal,
     }).then(async (response) => {
       if (!response.ok) {
         const err = await response.text();
         setProgress("❌ 连接失败: " + err);
         btn.disabled = false;
-        document.getElementById("update-progress-close").onclick = () => overlay.remove();
-        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
         return;
       }
       const reader = response.body.getReader();
@@ -506,12 +505,13 @@
         }
       }
     }).catch((err) => {
+      if (err.name === "AbortError") return;
       setProgress("❌ 连接失败: " + err.message);
       btn.disabled = false;
     }).finally(() => {
-      btn.disabled = false;
-      document.getElementById("update-progress-close").onclick = () => overlay.remove();
-      overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+      streamFinished = true;
+      window.removeEventListener("pagehide", abortOnPageHide);
+      if (!streamAbortController.signal.aborted) btn.disabled = false;
     });
   }
 

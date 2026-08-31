@@ -170,7 +170,8 @@ async function buildRuntime(): Promise<TeleBoxRuntime> {
   // stays that way beyond the grace period, trigger a full runtime reload.
   let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const DISCONNECT_RELOAD_DELAY_MS = 30_000;
-  client.addEventHandler((event) => {
+  const connectionStateEvent = new events.Raw({});
+  const connectionStateHandler = (event: unknown): void => {
     // Filter: only handle UpdateConnectionState events
     if (!(event instanceof UpdateConnectionState)) return;
     if (event.state === UpdateConnectionState.disconnected) {
@@ -193,15 +194,18 @@ async function buildRuntime(): Promise<TeleBoxRuntime> {
         console.log("[RUNTIME] Client reconnected before reload, canceling scheduled reload.");
       }
     }
-  }, new events.Raw({}));
+  };
+  client.addEventHandler(connectionStateHandler, connectionStateEvent);
 
-  // Register cleanup so the timer doesn't fire after destroy/shutdown.
+  // Remove the handler before client.destroy() so disconnect events emitted
+  // during teardown cannot recreate the grace timer after it was cleared.
   context.trackDisposable(() => {
+    client.removeEventHandler(connectionStateHandler, connectionStateEvent);
     if (disconnectTimer) {
       clearTimeout(disconnectTimer);
       disconnectTimer = null;
     }
-  }, { label: "runtime:disconnect-timer-cleanup" });
+  }, { label: "runtime:disconnect-watchdog-cleanup" });
 
   return runtime;
 }

@@ -83,7 +83,7 @@ test("configured custom source failure aborts instead of using official only", a
     getMergedRemotePluginsIndex({
       customSource: { url: "https://github.com/acme/plugins" },
       fetchIndex: async (url) =>
-        url.includes("TeleBoxOrg")
+        url.includes("MiCat-S")
           ? {
               status: 200,
               data: { official: { url: "https://example.com/official.ts" } },
@@ -98,7 +98,7 @@ test("configured custom source failure aborts instead of using official only", a
       customSource: { url: "https://github.com/acme/plugins" },
       fetchIndex: async (url) => ({
         status: 200,
-        data: url.includes("TeleBoxOrg")
+        data: url.includes("MiCat-S")
           ? {}
           : { "../../escape": { url: "https://example.com/escape.ts" } },
       }),

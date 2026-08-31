@@ -51,13 +51,23 @@ class Logger {
    */
   private static evictDowngradeLog(): void {
     const entries = Logger.downgradeLastLogged;
-    if (entries.size <= Logger.DOWNGRADE_MAX_ENTRIES) return;
+    if (entries.size < Logger.DOWNGRADE_MAX_ENTRIES) return;
     let evicted = 0;
     for (const key of entries.keys()) {
       entries.delete(key);
       evicted++;
       if (evicted >= Logger.DOWNGRADE_EVICT_BATCH) break;
     }
+  }
+
+  private static shouldLogDowngraded(rateKey: string, now: number): boolean {
+    const lastLogged = Logger.downgradeLastLogged.get(rateKey) || 0;
+    if (now - lastLogged < Logger.DOWNGRADE_LOG_INTERVAL_MS) return false;
+    if (!Logger.downgradeLastLogged.has(rateKey)) {
+      Logger.evictDowngradeLog();
+    }
+    Logger.downgradeLastLogged.set(rateKey, now);
+    return true;
   }
 
   private static originalDebug = console.debug;
@@ -128,23 +138,7 @@ class Logger {
       return String(arg);
     });
     
-    // 尝试获取调用者信息
     let caller = "";
-    const stack = new Error().stack?.split("\n");
-    if (stack) {
-        // 查找第一个非 Logger 类的调用帧
-        for (let i = 3; i < stack.length; i++) {
-            const line = stack[i];
-            if (!line.includes("logger.ts") && !line.includes("node_modules") && !line.includes("node:internal") && !line.includes("internal/")) {
-                const match = line.match(/\((.*):(\d+):(\d+)\)/) || line.match(/at (.*):(\d+):(\d+)/);
-                if (match) {
-                  const fileName = path.basename(match[1]);
-                  caller = ` ${COLORS.gray}[${fileName}:${match[2]}]${COLORS.reset}`;
-                }
-                break;
-            }
-        }
-    }
 
     // GramJS 日志格式清洗: [YYYY-MM-DDTHH:mm:ss.SSS] [LEVEL] - Message
     // 当 forceLevel=true 时（用于降级场景），仍然匹配并剥离 GramJS 前缀，
@@ -206,6 +200,26 @@ class Logger {
       }
     }
 
+    // GramJS already includes its origin in the message. Capturing Error.stack
+    // for that high-volume path is avoidable CPU work, so only do it for
+    // ordinary application logs.
+    if (!gramMatched) {
+      const stack = new Error().stack?.split("\n");
+      if (stack) {
+        for (let i = 3; i < stack.length; i++) {
+          const line = stack[i];
+          if (!line.includes("logger.ts") && !line.includes("node_modules") && !line.includes("node:internal") && !line.includes("internal/")) {
+            const match = line.match(/\((.*):(\d+):(\d+)\)/) || line.match(/at (.*):(\d+):(\d+)/);
+            if (match) {
+              const fileName = path.basename(match[1]);
+              caller = ` ${COLORS.gray}[${fileName}:${match[2]}]${COLORS.reset}`;
+            }
+            break;
+          }
+        }
+      }
+    }
+
     const levelLabel = `${levelColor}[${level}]${COLORS.reset}`;
     const timeLabel = `${COLORS.gray}[${timestamp}]${COLORS.reset}`;
     
@@ -254,13 +268,8 @@ class Logger {
         }
         const rateKey = channelId ? `pts_err:${channelId}` : 'pts_err:unknown';
         const now = Date.now();
-        const lastLogged = Logger.downgradeLastLogged.get(rateKey) || 0;
-        if (now - lastLogged >= Logger.DOWNGRADE_LOG_INTERVAL_MS) {
-          Logger.evictDowngradeLog();
-          Logger.downgradeLastLogged.set(rateKey, now);
-          if (this.level <= LogLevel.WARNING) {
-            Logger.originalLog(this.formatLog("WARN ", args, true));
-          }
+        if (this.level <= LogLevel.WARNING && Logger.shouldLogDowngraded(rateKey, now)) {
+          Logger.originalLog(this.formatLog("WARN ", args, true));
         }
         return;
       }
@@ -292,13 +301,8 @@ class Logger {
         }
         const rateKey = channelId ? `pts_err:${channelId}` : 'pts_err:unknown';
         const now = Date.now();
-        const lastLogged = Logger.downgradeLastLogged.get(rateKey) || 0;
-        if (now - lastLogged >= Logger.DOWNGRADE_LOG_INTERVAL_MS) {
-          Logger.evictDowngradeLog();
-          Logger.downgradeLastLogged.set(rateKey, now);
-          if (this.level <= LogLevel.WARNING) {
-            Logger.originalLog(this.formatLog("WARN ", args, true));
-          }
+        if (this.level <= LogLevel.WARNING && Logger.shouldLogDowngraded(rateKey, now)) {
+          Logger.originalLog(this.formatLog("WARN ", args, true));
         }
         return;
       }
@@ -320,12 +324,8 @@ class Logger {
         }
         const rateKey = channelId ? `pts_err:${channelId}` : 'pts_err:unknown';
         const now = Date.now();
-        const lastLogged = Logger.downgradeLastLogged.get(rateKey) || 0;
-        if (now - lastLogged >= Logger.DOWNGRADE_LOG_INTERVAL_MS) {
-          Logger.downgradeLastLogged.set(rateKey, now);
-          if (this.level <= LogLevel.WARNING) {
-            Logger.originalLog(this.formatLog("WARN ", args, true));
-          }
+        if (this.level <= LogLevel.WARNING && Logger.shouldLogDowngraded(rateKey, now)) {
+          Logger.originalLog(this.formatLog("WARN ", args, true));
         }
         return;
       }

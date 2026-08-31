@@ -10,6 +10,7 @@ interface CronTask {
   running: number;
   executionsStarted: number;
   executionsFinished: number;
+  overlapWarningLogged: boolean;
 }
 
 class CronManager {
@@ -41,15 +42,24 @@ class CronManager {
       running: 0,
       executionsStarted: 0,
       executionsFinished: 0,
+      overlapWarningLogged: false,
     };
 
     job = new CronJob(cron, () => {
       if (context?.signal.aborted) return;
+      if (taskState.running > 0) {
+        if (!taskState.overlapWarningLogged) {
+          taskState.overlapWarningLogged = true;
+          console.warn(`[CRON] Cron task "${name}" is still running; skipping overlapping execution.`);
+        }
+        return;
+      }
       taskState.running += 1;
       taskState.executionsStarted += 1;
-      const task = Promise.resolve(handler()).finally(() => {
+      const task = Promise.resolve().then(handler).finally(() => {
         taskState.running = Math.max(0, taskState.running - 1);
         taskState.executionsFinished += 1;
+        taskState.overlapWarningLogged = false;
       });
       if (context) {
         context.trackTask(task, { label: `cron:${name}:execution` });

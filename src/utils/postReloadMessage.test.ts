@@ -10,7 +10,9 @@ import { createGenerationContext } from "./generationContext";
 import { Plugin } from "./pluginBase";
 import {
   createPluginLoadReport,
+  loadPlugins,
   runPluginSetupsForReport,
+  withPluginOperationLock,
   writeJsonFileAtomically,
 } from "./pluginManager";
 import type { TeleBoxRuntime } from "./runtimeManager";
@@ -128,4 +130,52 @@ test("atomic JSON writer fsyncs and preserves the old source on rename failure",
     fs.fsyncSync = originalFsync;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("direct plugin reload waits for an in-flight TPM operation", async () => {
+  const events: string[] = [];
+  let release!: () => void;
+  let started!: () => void;
+  const operationStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  registerRuntimeAccess({
+    getCurrentGeneration: () => 1,
+    tryGetCurrentRuntime: () => null,
+    getGlobalClient: async () => ({}),
+    reloadRuntime: async () => {
+      events.push("reload");
+      return {};
+    },
+    startRuntime: async () => undefined,
+  });
+
+  const operation = withPluginOperationLock(async () => {
+    events.push("operation:start");
+    started();
+    await hold;
+    events.push("operation:end");
+  });
+  await operationStarted;
+  const reload = loadPlugins();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(events, ["operation:start"]);
+  release();
+  assert.equal(await reload, true);
+  await operation;
+  assert.deepEqual(events, ["operation:start", "operation:end", "reload"]);
+
+  assert.equal(
+    await withPluginOperationLock(async () => await loadPlugins()),
+    true,
+  );
+  assert.deepEqual(events, [
+    "operation:start",
+    "operation:end",
+    "reload",
+    "reload",
+  ]);
 });

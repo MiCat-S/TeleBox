@@ -841,7 +841,7 @@ function getPluginPanelAdapters(): PanelSettingsAdapter[] {
   return adapters;
 }
 
-async function loadPlugins(): Promise<boolean> {
+async function loadPluginsUnlocked(): Promise<boolean> {
   if (isPluginLoadInProgress()) {
     console.warn(
       "[RELOAD] Skip nested plugin reload while plugins are still being required. Move loadPlugins() out of module top-level initialization."
@@ -867,6 +867,10 @@ async function loadPlugins(): Promise<boolean> {
     console.error("[RELOAD] loadPlugins via reloadRuntime failed:", error);
     return false;
   }
+}
+
+async function loadPlugins(): Promise<boolean> {
+  return withPluginOperationLock(loadPluginsUnlocked);
 }
 
 export {
