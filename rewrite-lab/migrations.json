@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "core": "e30d7f5",
+    "plugins": "8e2baf7"
+  },
+  "entries": {
+    "TeleBox-Plugins/ids/ids.ts": {
+      "implementation": "TeleBox-Plugins/ids/v2.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Plugins/scripts/ids-v2.test.js"],
+      "coverage": ["help", "self", "explicit-target", "reply-target", "exact-ids", "profile-and-participant", "registration-estimate", "single-profile-query", "html-pagination", "error-redaction", "cancellation", "owner-admission", "50-reloads"],
+      "pending": ["authorized Telegram verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Plugins/dc/dc.ts": {
+      "implementation": "TeleBox-Plugins/dc/v2.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Plugins/scripts/dc-v2.test.js"],
+      "coverage": ["current-chat", "explicit-target", "reply-priority", "reply-chat-fallback", "exact-ids", "mention-entities", "photo-states", "borrowed-client", "error-redaction", "cancellation", "owner-admission", "50-reloads"],
+      "pending": ["authorized Telegram verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Plugins/ai/ai.ts": {
+      "implementation": "TeleBox-Plugins/ai/v2/provider.ts",
+      "status": "in-progress",
+      "tests": ["TeleBox-Plugins/scripts/ai-v2-provider.test.js"],
+      "coverage": ["text-provider-request", "isolated-translation-prompt", "provider-options", "bounded-response", "cancellation", "error-redaction"],
+      "pending": ["AI command and settings migration", "search and media support", "translation service registration", "authorized live model verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Core/src/plugin/help.ts": {
+      "implementation": "TeleBox-Core/src/v2/builtins/help.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Core/src/v2/builtins/help.test.ts"],
+      "coverage": ["command-catalog", "module-details", "aliases", "prefixes", "cron-metadata", "html", "pagination", "cancellation"],
+      "pending": ["full-catalog integration", "authorized Telegram rendering verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Core/src/plugin/alias.ts": {
+      "implementation": "TeleBox-Core/src/v2/builtins/alias.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Core/src/v2/builtins/alias.test.ts"],
+      "coverage": ["commands", "legacy-sqlite", "unknown-fields", "atomic-publication", "concurrency", "permission-negative", "cancellation", "50-reloads"],
+      "pending": ["authorized Telegram verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Plugins/ip/ip.ts": {
+      "implementation": "TeleBox-Plugins/ip/v2.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Plugins/scripts/ip-v2.test.js"],
+      "coverage": ["help", "direct-query", "reply-query", "ipv4", "ipv6", "domains", "provider-presentation", "http-failures", "escaping", "response-bounds", "cancellation", "owner-admission", "50-reloads"],
+      "pending": ["authorized provider and Telegram verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Plugins/gt/gt.ts": {
+      "implementation": "TeleBox-Plugins/gt/v2.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Plugins/scripts/gt-v2.test.js"],
+      "coverage": ["help", "direct-text", "reply-text", "targets", "output-chunks", "escaping", "error-redaction", "cancellation", "owner-admission"],
+      "pending": ["ai.translate production implementation", "authorized live model verification", "same-host resource acceptance"]
+    }
+  }
+}

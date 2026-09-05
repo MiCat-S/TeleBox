@@ -18,6 +18,6 @@
       "*": ["./*"]
     }
   },
-  "exclude": ["node_modules", "dist", "temp", "temp/**/*"],
+  "exclude": ["node_modules", "dist", "temp", "temp/**/*", "src/v2"],
   "include": ["src/**/*", "plugins/**/*"]
 }

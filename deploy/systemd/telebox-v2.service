@@ -1,0 +1,27 @@
+# SERVICE TEMPLATE ONLY. The initial index CLI is OFFLINE ONLY.
+# Do not install or enable until the README migration/login gates pass.
+[Unit]
+Description=TeleBox v2
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/root/telebox
+# Operator must verify this absolute Node 24 binary path.
+ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=60s
+SendSIGKILL=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telebox-v2
+
+[Install]
+WantedBy=multi-user.target

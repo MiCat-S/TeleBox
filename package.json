@@ -7,7 +7,11 @@
     "tpm": "node scripts/run-tsx.cjs ./src/plugin/tpm.ts",
     "dev": "NODE_ENV=development node scripts/run-tsx.cjs ./src/index.ts",
     "leech:smoke": "node scripts/run-tsx.cjs ./scripts/leech-smoke.ts",
-    "precompile": "node scripts/precompile-plugins.cjs"
+    "precompile": "node scripts/precompile-plugins.cjs",
+    "build:v2": "node scripts/build-v2.cjs",
+    "test:v2": "node scripts/test-v2.cjs",
+    "typecheck:v2": "tsc -p tsconfig.v2.json",
+    "check:v2": "node dist/v2/index.js --check"
   },
   "repository": {
     "type": "git",
@@ -17,6 +21,12 @@
   "author": "",
   "license": "LGPL-2.1-only",
   "type": "commonjs",
+  "exports": {
+    "./sdk": {
+      "types": "./src/v2/sdk.ts",
+      "default": "./dist/v2/sdk.js"
+    }
+  },
   "bugs": {
     "url": "https://github.com/TeleBoxOrg/TeleBox/issues"
   },
@@ -52,6 +62,7 @@
     "dotenv": "^17.2.2",
     "emoji-db": "^16.0.1",
     "esbuild": "^0.28.1",
+    "htmlparser2": "10.1.0",
     "jimp": "^1.6.1",
     "js-yaml": "^5.2.1",
     "lodash": "^4.17.21",
