@@ -209,6 +209,7 @@ class Conversation {
     rowIndex: number,
     colIndex: number
   ): Promise<void> {
+    throwIfAborted(resolveConversationOptions(this.options).signals);
     if (
       !message.replyMarkup ||
       !(message.replyMarkup instanceof Api.ReplyInlineMarkup)
@@ -217,16 +218,23 @@ class Conversation {
     }
 
     const rows = message.replyMarkup.rows;
-    if (rowIndex >= rows.length || colIndex >= rows[rowIndex].buttons.length) {
+    if (
+      !Number.isInteger(rowIndex) || !Number.isInteger(colIndex) ||
+      rowIndex < 0 || colIndex < 0 ||
+      rowIndex >= rows.length || colIndex >= rows[rowIndex].buttons.length
+    ) {
       throw new Error("按钮索引超出范围");
     }
 
     const button = rows[rowIndex].buttons[colIndex];
+    if (!(button.type instanceof Api.InlineButtonTypeCallback)) {
+      throw new Error("按钮不是回调按钮");
+    }
     await this.client.invoke(
       new Api.messages.GetBotCallbackAnswer({
         peer: this.peer,
         msgId: message.id,
-        data: (button as Api.KeyboardButtonCallback).data,
+        data: button.type.data,
       })
     );
   }
