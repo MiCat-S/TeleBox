@@ -5,6 +5,13 @@
     "plugins": "8e2baf7"
   },
   "entries": {
+    "TeleBox-Core/src/plugin/loglevel.ts": {
+      "implementation": "TeleBox-Core/src/v2/builtins/loglevel.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Core/src/v2/builtins/loglevel.test.ts", "TeleBox-Core/src/v2/logging.test.ts"],
+      "coverage": ["level-query", "level-aliases", "legacy-json", "unknown-fields", "protocol-level-sync", "level-filtering", "concurrency", "permission-negative", "cancellation", "50-reloads"],
+      "pending": ["authenticated startup integration", "authorized Telegram verification", "same-host resource acceptance"]
+    },
     "TeleBox-Plugins/ids/ids.ts": {
       "implementation": "TeleBox-Plugins/ids/v2.ts",
       "status": "offline-verified",
