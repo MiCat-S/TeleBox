@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const root = path.resolve(__dirname, '..');
+const plugins = path.resolve(root, '../TeleBox-Plugins');
 
 function run(args) {
   const result = spawnSync(process.execPath, args, {cwd: root, stdio: 'inherit', shell: false});
@@ -27,9 +28,9 @@ visit(path.join(root, 'dist/v2'));
 if (!tests.length) throw new Error('No compiled v2 tests found');
 tests.push(path.join(__dirname, 'build-v2.test.cjs'));
 tests.push(path.join(__dirname, 'build-v2-plugin.test.cjs'));
-tests.push(path.resolve(root, '../TeleBox-Plugins/scripts/gt-v2.test.js'));
-tests.push(path.resolve(root, '../TeleBox-Plugins/scripts/ip-v2.test.js'));
-tests.push(path.resolve(root, '../TeleBox-Plugins/scripts/ai-v2-provider.test.js'));
-tests.push(path.resolve(root, '../TeleBox-Plugins/scripts/ids-v2.test.js'));
-tests.push(path.resolve(root, '../TeleBox-Plugins/scripts/dc-v2.test.js'));
+const extensionTests = fs.readdirSync(path.join(plugins, 'scripts'), {withFileTypes: true})
+  .filter(entry => entry.isFile() && /-v2(?:-[a-z0-9-]+)?\.test\.js$/.test(entry.name))
+  .map(entry => path.join(plugins, 'scripts', entry.name));
+if (!extensionTests.length) throw new Error('No migrated extension tests found');
+tests.push(...extensionTests);
 run(['--unhandled-rejections=strict', '--test', ...tests.sort()]);

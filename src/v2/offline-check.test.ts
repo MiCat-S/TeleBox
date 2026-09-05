@@ -17,8 +17,9 @@ test("offline CLI integrates built-ins, SQLite reload, services and admission wi
   assert.equal(result.stderr, "");
   const output = JSON.parse(result.stdout);
   assert.equal(output.result, "ok");
-  assert.deepEqual(output.loaded, ["alias", "check", "help"]);
+  assert.deepEqual(output.loaded, ["alias", "check", "help", "loglevel", "prefix"]);
   assert.deepEqual(output.checks, {commands: true, services: true, help: true, aliases: true,
+    prefixes: true, prefixPersistence: true, logging: true, loggingReload: true,
     sqliteReload: true, ownerAdmission: true, editedAdmission: true, compilerResident: false});
   assert.deepEqual(output.lifecycle, {completed: true, timedOut: false, pendingTasks: 0, pendingResources: 0, errors: []});
   assert.deepEqual(fs.readFileSync(path.join(root, "config.json")), marker);

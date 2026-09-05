@@ -13,8 +13,9 @@ for all 151 entries, including planned entries and archived extensions.
 
 ## Validation
 
-Use Node.js 24 with the installed native dependencies matching its ABI. From the
-Core checkout, with `TeleBox-Plugins` checked out alongside it:
+Use Node.js 24 with the installed native dependencies matching its ABI. Run these
+commands from the Core checkout, with `TeleBox-Plugins` checked out alongside it.
+Both repositories must use the matching `codex/telebox-runtime-v2` development branch:
 
 ```sh
 node scripts/test-v2.cjs
@@ -23,16 +24,24 @@ node dist/v2/index.js --check
 ```
 
 The test runner first checks both v2 TypeScript projects, then compiles and runs
-Core, build-chain, and migrated extension tests. The production build excludes
-test sources. The offline check uses temporary storage and a fake transport;
-it exercises help, aliases, SQLite persistence across reload, service calls,
-command admission, and complete shutdown. It does not read account configuration,
+Core, build-chain, and migrated extension tests named `*-v2.test.js` or
+`*-v2-<component>.test.js` in the extension repository's `scripts` directory.
+The production build excludes test sources. The offline check uses temporary
+storage and a fake transport;
+it exercises help, aliases, SQLite persistence across reload, dynamic prefixes,
+environment-file persistence, logging levels and configuration reload, service
+calls, command admission, and complete shutdown. It does not read account configuration,
 log in, contact providers, or load installed user plugins.
 
 ## Runtime Boundaries
 
 - `PluginHost` owns plugin generations, command dispatch, settings and service
   registration. Normal command execution has a bounded, per-chat ordered queue.
+- Prefix changes update the active dispatch table while preserving loaded plugin
+  generations. Environment persistence retains user content and uses dotenv to
+  verify values. `RuntimeLogger` keeps legacy numeric levels in
+  `assets/logger/config.json`; its injected sink owns log output and backpressure.
+  This level controller does not install a global console or protocol-log bridge.
 - `ResourceScope` retains tasks and cleanups until they actually settle. A drain
   deadline reports unfinished work; it never releases their resource ownership.
 - JSON updates are serialized and atomically renamed. Existing JSON documents
@@ -84,6 +93,9 @@ export default function createExample() {
 `context.telegram` emits literal text unless `parseMode` is supplied. Native
 operations use `withClient` and must await all their work inside its callback.
 Service handlers must honor their call signal as well as their plugin lifecycle.
+`context.files.dataPath` resolves a plugin-owned asset path without filesystem I/O;
+it is for trusted native integrations, not a symlink sandbox or an existence check.
+Any subsequent I/O must remain in a tracked operation.
 `context.files.withTemp` keeps files until its callback actually settles, including
 after cancellation. It is not safe to start detached work that outlives a callback.
 
@@ -103,7 +115,7 @@ cache entries are released; shared dependencies and native modules remain cached
 
 ## Remaining Integration
 
-Authenticated startup, legacy environment/configuration mapping, main-DC upload
+Authenticated startup, remaining legacy environment/configuration mapping, main-DC upload
 and channel-gap compatibility, sudo/sure routing, full built-ins and extensions,
 panel authentication/UI, warm media workers, account exclusivity, and deployment
 controllers are not yet a complete integrated application.

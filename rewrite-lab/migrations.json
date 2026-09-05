@@ -5,6 +5,27 @@
     "plugins": "8e2baf7"
   },
   "entries": {
+    "TeleBox-Plugins/nodeseek/nodeseek.ts": {
+      "implementation": "TeleBox-Plugins/nodeseek/v2.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Plugins/scripts/nodeseek-v2.test.js"],
+      "coverage": ["commands", "independent-legacy-configs", "unknown-fields", "scheduled-check-in", "reward-modes", "bounded-retries", "waf-fallback", "legacy-python-venv", "dependency-probe", "bounded-responses", "utf16", "secret-redaction", "permission-negative", "cancellation", "50-reloads"],
+      "pending": ["authorized Python and curl_cffi environment verification", "authorized provider and Telegram verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Core/src/plugin/prefix.ts": {
+      "implementation": "TeleBox-Core/src/v2/builtins/prefix.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Core/src/v2/builtins/prefix.test.ts", "TeleBox-Core/src/v2/prefixes.test.ts", "TeleBox-Core/src/v2/host.test.ts"],
+      "coverage": ["commands", "environment-defaults", "dotenv-preservation", "dynamic-dispatch", "concurrency", "bounded-config-updates", "permission-negative", "cancellation", "50-reloads"],
+      "pending": ["authenticated startup integration", "authorized Telegram verification", "same-host resource acceptance"]
+    },
+    "TeleBox-Plugins/rate/rate.ts": {
+      "implementation": "TeleBox-Plugins/rate/v2.ts",
+      "status": "offline-verified",
+      "tests": ["TeleBox-Plugins/scripts/rate-v2.test.js"],
+      "coverage": ["all-currencies-and-aliases", "fiat-and-crypto-conversion", "provider-fallbacks", "bounded-caches", "bounded-responses", "timeout", "error-redaction", "permission-negative", "cancellation", "50-reloads"],
+      "pending": ["authorized provider and Telegram verification", "same-host resource acceptance"]
+    },
     "TeleBox-Core/src/plugin/loglevel.ts": {
       "implementation": "TeleBox-Core/src/v2/builtins/loglevel.ts",
       "status": "offline-verified",

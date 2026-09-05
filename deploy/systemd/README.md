@@ -30,8 +30,9 @@ The final command invokes the application's initial offline CLI. Its eventual
 service entrypoint must satisfy the activation gates above. The default production
 build excludes `*.test.ts`; `--test` includes them at every directory depth.
 The test runner checks both v2 TypeScript projects and includes nested Core tests,
-build-chain tests, and the explicitly migrated extension tests from the sibling
-`TeleBox-Plugins` checkout. Declaration files (`*.d.ts`) are typecheck inputs, not executable
+build-chain tests, and `*-v2.test.js` / `*-v2-<component>.test.js` extension tests from
+the sibling `TeleBox-Plugins` checkout on the matching `codex/telebox-runtime-v2`
+branch. Declaration files (`*.d.ts`) are typecheck inputs, not executable
 outputs. Other static assets are not copied by this TypeScript-only build.
 
 The build launches the installed esbuild CLI as a short-lived process, emits
