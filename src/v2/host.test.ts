@@ -303,6 +303,75 @@ test("alias snapshots update atomically and never shadow a real command", async 
   assert.equal(host.configuration().aliases.go, 'ping one');
 });
 
+test("replacePrefixes publishes a detached snapshot while retaining plugin generations", async t => {
+  const {host} = await fixture(t, {aliases: {go: "ping"}});
+  let context!: PluginContext;
+  let calls = 0;
+  let cleanups = 0;
+  await host.load(plugin(() => { calls++; }, {setup(value) { context = value; }, cleanup() { cleanups++; }}));
+  const prefixes = ["!", "🙂", "!"];
+  host.replacePrefixes(prefixes);
+  prefixes[0] = "mutated";
+  host.configuration().prefixes.push("snapshot");
+  assert.deepEqual(host.configuration(), {prefixes: ["!", "🙂"], aliases: {go: "ping"}});
+  assert.equal(await host.dispatchPrimary(envelope), false);
+  assert.equal(await host.dispatchPrimary({...envelope, text: "🙂go"}), true);
+  assert.equal(context.signal.aborted, false);
+  assert.equal(cleanups, 0);
+  assert.equal(calls, 1);
+});
+
+test("replacePrefixes validates atomically and refuses updates after shutdown", async t => {
+  const {host} = await fixture(t);
+  for (const value of [[], [""], ["a b"], ["\n"], ["\0"], [42], Array(1), null]) {
+    assert.throws(() => host.replacePrefixes(value as string[]));
+    assert.deepEqual(host.configuration().prefixes, ["."]);
+  }
+  await host.shutdown();
+  assert.throws(() => host.replacePrefixes(["!"]));
+  assert.deepEqual(host.configuration().prefixes, ["."]);
+});
+
+test("constructor and replacePrefixes share default, validation and deduplication semantics", async t => {
+  const {host, root} = await fixture(t);
+  const options: HostOptions = {storageRoot: root, logger: {info() {}, error() {}}, telegram: {
+    async edit() {}, async reply() {}, async invoke() {}, async getReply() { return undefined; },
+    async withClient() { throw new Error("unused"); },
+  }};
+  assert.deepEqual(host.configuration().prefixes, ["."]);
+  for (const prefixes of [[], [""], ["a b"], ["\n"], ["\0"], [42], Array(1), null]) {
+    assert.throws(() => new PluginHost({...options, prefixes: prefixes as string[]}));
+    assert.throws(() => host.replacePrefixes(prefixes as string[]));
+  }
+  const initial = ["🙂", "!", "🙂"];
+  const other = new PluginHost({...options, prefixes: initial});
+  try {
+    host.replacePrefixes(initial);
+    initial.push("mutated");
+    assert.deepEqual(other.configuration().prefixes, ["🙂", "!"]);
+    assert.deepEqual(host.configuration().prefixes, other.configuration().prefixes);
+  } finally { assert.equal((await other.shutdown()).completed, true); }
+});
+
+test("a running command can replace prefixes without aborting itself or admitted commands", async t => {
+  const {host} = await fixture(t);
+  const started = deferred();
+  const release = deferred();
+  let calls = 0;
+  await host.load(plugin(async (_input, context) => {
+    calls++;
+    if (calls === 1) { started.resolve(); await release.promise; host.replacePrefixes(["!"]); }
+    assert.equal(context.signal.aborted, false);
+  }));
+  const first = host.dispatchPrimary(envelope);
+  await started.promise;
+  const admitted = host.dispatchPrimary(envelope);
+  release.resolve();
+  assert.deepEqual(await Promise.all([first, admitted]), [true, true]);
+  assert.equal(await host.dispatchPrimary({...envelope, text: "!ping"}), true);
+  assert.equal(calls, 3);
+});
+
 test("settings bindings stop at unload and secret updates preserve untouched fields", async t => {
   const {host} = await fixture(t);
   const secret = 'fixture-secret';

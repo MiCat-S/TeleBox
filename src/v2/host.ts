@@ -36,12 +36,11 @@ export class PluginHost {
   private processes?: ScopedProcesses;
   private readonly plugins = new Map<string, LoadedPlugin>();
   private readonly commands = new Map<string, CommandTarget>();
-  private readonly prefixes: readonly string[];
+  private prefixes: readonly string[] = [];
   private aliases: ReadonlyMap<string, string>;
 
   constructor(private readonly options: HostOptions) {
-    this.prefixes = Object.freeze([...(options.prefixes ?? ["."])]);
-    if (!this.prefixes.length || this.prefixes.some(prefix => !prefix)) throw new Error("Non-empty command prefixes required");
+    this.replacePrefixes(options.prefixes === undefined ? ["."] : options.prefixes);
     this.aliases = new Map();
     this.replaceAliases(options.aliases ?? {});
     this.scheduler = new PluginScheduler(options.logger);
@@ -71,6 +70,15 @@ export class PluginHost {
 
   configuration() {
     return {prefixes: [...this.prefixes], aliases: Object.fromEntries(this.aliases)};
+  }
+
+  replacePrefixes(prefixes: readonly string[]): void {
+    this.root.signal.throwIfAborted();
+    if (!Array.isArray(prefixes) || !prefixes.length ||
+        [...prefixes].some(prefix => typeof prefix !== "string" || !prefix || /[\s\0]/u.test(prefix))) {
+      throw new Error("Non-empty command prefix tokens required");
+    }
+    this.prefixes = Object.freeze([...new Set(prefixes)]);
   }
 
   replaceAliases(aliases: Readonly<Record<string, string>>): void {
