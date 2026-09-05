@@ -29,6 +29,28 @@ test('file capabilities are lazy, private and confined to their plugin', async t
   }
 });
 
+test('dataPath resolves existing asset names without filesystem side effects or retained resources', async t => {
+  const {root, files, scope} = await fixture(t);
+  assert.equal(files.dataPath(), path.join(root, 'assets/fixture'));
+  for (let index = 0; index < 1000; index++) {
+    assert.equal(files.dataPath('curl_cffi_venv/bin/python'), path.join(root, 'assets/fixture/curl_cffi_venv/bin/python'));
+  }
+  assert.deepEqual(await readdir(root), []);
+  assert.equal(scope.snapshot().pendingTasks, 0);
+  assert.equal(scope.snapshot().pendingResources, 0);
+});
+
+test('dataPath rejects relative traversal and expired capabilities without touching disk', async t => {
+  const {root, files, scope} = await fixture(t);
+  for (const name of ['../outside', '/absolute', '', 'a//b', './same', 'a\\b', 'a\u0000b']) {
+    assert.throws(() => files.dataPath(name), /Invalid plugin data path/);
+  }
+  assert.equal((await scope.drain()).completed, true);
+  assert.throws(() => files.dataPath());
+  assert.throws(() => files.dataPath('data.json'));
+  assert.deepEqual(await readdir(root), []);
+});
+
 test('data paths reject symlinked directories and targets', async t => {
   const {root, files} = await fixture(t);
   const directory = await files.dataDirectory();

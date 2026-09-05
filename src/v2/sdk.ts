@@ -65,7 +65,7 @@ export interface PluginContext {
   };
   readonly http: Pick<ScopedHttp, "withResponse" | "text" | "json">;
   readonly processes: Pick<ScopedProcesses, "run">;
-  readonly files: Pick<ScopedFiles, "dataDirectory" | "dataFile" | "withTemp">;
+  readonly files: Pick<ScopedFiles, "dataPath" | "dataDirectory" | "dataFile" | "withTemp">;
   readonly log: PluginLogger;
 }
 

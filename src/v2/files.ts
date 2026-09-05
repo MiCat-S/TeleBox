@@ -31,6 +31,13 @@ export class ScopedFiles {
     this.temporary = path.resolve(tempRoot, pluginId);
   }
 
+  /** Resolve an existing asset location without creating directories or opening files. */
+  dataPath(relative?: string): string {
+    this.scope.signal.throwIfAborted();
+    if (relative !== undefined) relativeFile(relative);
+    return relative === undefined ? this.data : path.join(this.data, relative);
+  }
+
   dataDirectory(relative?: string): Promise<string> {
     return this.scope.run('files:directory', async signal => {
       if (relative !== undefined) relativeFile(relative);
