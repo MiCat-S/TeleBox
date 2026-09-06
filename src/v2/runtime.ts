@@ -163,7 +163,8 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     await host.load(createRe());
     await host.load(createAgent());
     await host.load(createExec());
-    await host.load(createRestart(selfId, rootScope.signal));
+    const restart = createRestart(selfId, rootScope.signal);
+    await host.load(restart);
     await host.load(createBf(root));
     await host.load(createLeech());
     await host.load(createSudo());
@@ -183,7 +184,9 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
       }
     }, {selfId});
     logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 21});
-    reason = await waitForStop(options.signals ?? ["SIGINT", "SIGTERM"], rootScope);
+    const stopped = waitForStop(options.signals ?? ["SIGINT", "SIGTERM"], rootScope);
+    await restart.notifyReady();
+    reason = await stopped;
   } catch (error) {
     failure = error;
   } finally {
