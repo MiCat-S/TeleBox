@@ -22,7 +22,6 @@ export default function createRe() {
             await client.forwardMessages(target!, {messages: ids, fromPeer: source!});
           }
         });
-        await ctx.telegram.edit(invocation.message, `已复读 ${count} 条消息 ${repeat} 次`);
       } catch {
         if (!ctx.signal.aborted) await ctx.telegram.edit(invocation.message, "复读失败：目标消息可能禁止转发");
       }
