@@ -204,6 +204,20 @@ export function createHelp(host: HelpHost): PluginDefinition {
             ...format.normalize(`使用 ${code(prefix + "help [模块名]")} 查看模块详情`),
           ]));
         }
+        const quickModules: Block[] = [];
+        for (const plugin of [...plugins].filter((entry) => entry.commands.length === 1)
+          .sort((a, b) => a.id.localeCompare(b.id))) {
+          const command = plugin.commands[0];
+          quickModules.push(...format.normalize(
+            `<b>${pluginTitle(plugin.id)}</b>　${escape(plugin.description || command.description)}`,
+          ));
+        }
+        if (quickModules.length) {
+          output.push(...pages([
+            ...format.normalize("<b>快捷模块</b>"), ...quickModules,
+            ...format.normalize(`使用 ${code(prefix + "help [模块名]")} 查看详细说明`),
+          ]));
+        }
       } else {
         const target = resolve(query, plugins, configuration.prefixes, aliases);
         if (!target) {
