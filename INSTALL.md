@@ -13,12 +13,12 @@ apt-get install -y git build-essential python3 pkg-config libcairo2-dev libpango
 
 ## 获取与构建
 
-两个仓库都显式选择 V2 分支。插件目录名保留 `TeleBox-Plugins`，
+两个仓库都使用 `main` 分支。插件目录名保留 `TeleBox-Plugins`，
 这是打包工具默认使用的同级路径。已有目录不得直接覆盖。
 
 ```sh
-git clone --branch codex/telebox-runtime-v2 https://github.com/MiCat-S/Mi-Box.git /root/telebox
-git clone --branch codex/telebox-runtime-v2 https://github.com/MiCat-S/Mi-Box-Plugins.git /root/TeleBox-Plugins
+git clone --branch main https://github.com/MiCat-S/Mi-Box.git /root/telebox
+git clone --branch main https://github.com/MiCat-S/Mi-Box-Plugins.git /root/TeleBox-Plugins
 cd /root/telebox
 npm ci
 npm run package:v2
