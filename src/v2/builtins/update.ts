@@ -8,6 +8,7 @@ import type {ProcessError} from "../processes";
 
 type Receipt = {ownerId: string; chatId: string; messageId: number; requestedAt: number; bootId: string};
 type UpdateState = {pending: Receipt | null};
+type UpdateResult = {status: "success" | "failed"; reason?: string | null};
 
 export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const bootId = randomUUID();
@@ -28,6 +29,18 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
       return `${processError.message}${tail ? `\n${tail}` : ""}`;
     }
     return "请查看服务日志并检查权限与安装状态。";
+  };
+  const escapeHtml = (value: string): string => value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+  const formatUpdateResult = (result: Partial<UpdateResult>): string | null => {
+    if (result.status !== "failed") return null;
+    const reason = typeof result.reason === "string" ? result.reason.trim() : "";
+    if (reason) return reason;
+    return "更新服务返回失败但未附带详情";
   };
   const readServiceLog = async (ctx: PluginContext): Promise<string> => {
     try {
@@ -52,9 +65,11 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
       for (let attempt = 0; attempt < 300; attempt += 1) {
         signal.throwIfAborted();
         try {
-          const result = JSON.parse(await readFile(resultFile, "utf8")) as {status?: unknown};
-          if (result.status === "failed") {
-            await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n更新任务未完成，服务保持当前版本。请稍后重试或查看服务器日志。");
+          const result = JSON.parse(await readFile(resultFile, "utf8")) as Partial<UpdateResult>;
+      if (result.status === "failed") {
+            const detail = formatUpdateResult(result);
+            await reportFailure(ctx, receipt,
+              `<b>MiBot 更新失败</b>\n更新任务未完成，服务保持当前版本。请稍后重试或查看服务器日志。${detail ? `\n原因：${escapeHtml(detail)}` : ""}`);
             return;
           }
           if (result.status === "success") { pending = false; await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true},
@@ -147,12 +162,14 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         return;
       }
       let status: "success" | "failed" | undefined;
+      let reason: string | null = null;
       try {
         for (let attempt = 0; attempt < 30; attempt += 1) {
           try {
-            const result = JSON.parse(await readFile(resultFile, "utf8")) as {status?: unknown};
+            const result = JSON.parse(await readFile(resultFile, "utf8")) as Partial<UpdateResult>;
             if (result.status === "success" || result.status === "failed") {
               status = result.status;
+              reason = typeof result.reason === "string" ? result.reason.trim() : null;
               break;
             }
           } catch {}
@@ -170,8 +187,10 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
       }
       if (status === "success" || status === "failed") {
         await ctx.telegram.edit({id: pending.messageId, chatId: pending.chatId, text: "", outgoing: true},
-          status === "success" ? "<b>MiBot 更新成功</b>\n代码、依赖和插件已更新，服务已重新上线。"
-            : "<b>MiBot 更新失败</b>\n服务保持当前版本，请查看 <code>.update check</code> 或服务器日志。", {parseMode: "html"});
+          status === "success"
+            ? "<b>MiBot 更新成功</b>\n代码、依赖和插件已更新，服务已重新上线。"
+            : `<b>MiBot 更新失败</b>\n服务保持当前版本。请查看 <code>.update check</code> 或服务器日志。${reason ? `\n原因：${escapeHtml(reason)}` : ""}`,
+          {parseMode: "html"});
         await clear(ctx, pending);
         try { await unlink(resultFile); } catch {}
       }
