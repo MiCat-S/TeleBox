@@ -20,6 +20,22 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
+  const readServiceStatus = async (ctx: PluginContext): Promise<string> => {
+    const fields = ["LoadState", "ActiveState", "UnitFileState", "SubState", "CanStart", "FragmentPath"];
+    const rows: string[] = [];
+    for (const field of fields) {
+      try {
+        const value = await ctx.processes.run("/usr/bin/systemctl",
+          ["show", "--value", `-p`, field, updateService],
+          {timeoutMs: 1500, maxOutputBytes: 600});
+        const text = value.stdout.toString("utf8").trim() || "unknown";
+        rows.push(`${field}: ${text}`);
+      } catch {
+        rows.push(`${field}: unavailable`);
+      }
+    }
+    return rows.join("<br>");
+  };
   const summarizeProcessError = (error: unknown): string => {
     if (error instanceof Error && (error as ProcessError).code) {
       const processError = error as ProcessError;
@@ -128,8 +144,14 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
-          await ctx.processes.run("/usr/bin/systemctl", ["show", "--value", "-p", "LoadState", updateService],
-            {timeoutMs: 3000, maxOutputBytes: 2000});
+          const status = await readServiceStatus(ctx);
+          if (!status.includes("LoadState: loaded")) {
+            submitted = false;
+            await reportFailure(ctx, receipt,
+              `<b>MiBot 更新失败</b>\n更新任务未启动：更新服务未正确加载。\n` +
+              `服务检查结果：${status}\n\n请先执行：<code>bash scripts/install-service.sh</code> 或确认服务文件是否存在。`);
+            return;
+          }
           await ctx.processes.run("/usr/bin/systemctl", ["reset-failed", updateService], {timeoutMs: 5000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["daemon-reload"], {timeoutMs: 5000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", updateService],
@@ -138,8 +160,9 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         } catch (error) {
           submitted = false;
           const logs = await readServiceLog(ctx);
+          const status = await readServiceStatus(ctx);
           await reportFailure(ctx, receipt,
-            `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>${logs}`);
+            `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n服务状态：${status}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>\n<code>systemctl show ${updateService}</code>${logs}`);
           return;
         }
         watchResult(ctx, receipt);
