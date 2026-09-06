@@ -33,7 +33,7 @@ function fixture({exists = false, failure = false} = {}) {
     console: {log() {}, error() {}},
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'login-v2.cjs'), 'utf8'), context);
-  return {login: context.module.exports.login, writes, events};
+  return {login: context.module.exports.login, diagnostic: context.module.exports.diagnostic, writes, events};
 }
 test('login saves complete account exclusively with private permissions and closes client', async () => {
   const f = fixture(); await f.login();
@@ -56,4 +56,10 @@ test('login failure closes client without saving a partial account', async () =>
   await assert.rejects(f.login());
   assert.deepEqual(f.events, ['client', 'close', 'destroy']);
   assert.equal(f.writes.length, 0);
+});
+test('login diagnostics expose known error codes without upstream secrets', () => {
+  const {diagnostic} = fixture();
+  assert.equal(diagnostic({code: 'ECONNREFUSED'}), 'ECONNREFUSED');
+  assert.equal(diagnostic({errorMessage: 'PHONE_CODE_INVALID'}), 'PHONE_CODE_INVALID');
+  assert.equal(diagnostic({message: 'secret-session +12345'}), 'UNCLASSIFIED');
 });
