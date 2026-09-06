@@ -26,6 +26,7 @@ import createLeech from "./builtins/leech";
 import createSudo from "./builtins/sudo";
 import createSure from "./builtins/sure";
 import createTpm from "./builtins/tpm";
+import createUpdate from "./builtins/update";
 import {prepareArtifact, type PreparedArtifact} from "./artifacts";
 import {TeleprotoPort, subscribeMessages} from "./telegram";
 import {AccountError, assertLegacyStopped, lockAccount, readAccount, readEnvironment} from "./account";
@@ -158,6 +159,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     await host.load(createSudo());
     await host.load(createSure());
     await host.load(createTpm());
+    await host.load(createUpdate(root));
     await loadDaily(host, pluginRoot, prepared);
     detach = await subscribeMessages(client, events, async (message, signal) => {
       signal.throwIfAborted();
@@ -169,7 +171,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
         if (!signal.aborted) logger.error("runtime.message_failed", {kind: error instanceof Error ? error.name : "unknown"});
       }
     }, {selfId});
-    logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 19});
+    logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 20});
     reason = await waitForStop(options.signals ?? ["SIGINT", "SIGTERM"], rootScope);
   } catch (error) {
     failure = error;
