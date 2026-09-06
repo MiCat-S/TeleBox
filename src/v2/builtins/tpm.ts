@@ -8,7 +8,7 @@ export default function createTpm(host: PluginHost, releases: PluginReleases, ro
   let busy = false;
   const repository = async (ctx: PluginContext, action: string, id?: string) => {
     const result = await ctx.processes.run(process.execPath, [path.join(root, "scripts/plugin-repository.cjs"), action, ...(id ? [id] : [])],
-      {timeoutMs: 90000, maxOutputBytes: 65536});
+      {timeoutMs: 30000, maxOutputBytes: 65536});
     return JSON.parse(result.stdout.toString("utf8")) as {ids?: string[]; id?: string; revision?: string};
   };
   return definePlugin({apiVersion: 1, id: "tpm", description: "安装、卸载和更新 V2 扩展插件",
@@ -31,6 +31,7 @@ export default function createTpm(host: PluginHost, releases: PluginReleases, ro
         await ctx.telegram.edit(invocation.message, "请提供一个有效的插件名"); return;
       }
       busy = true;
+      let stage = "repository";
       try {
         if (sub === "search" || sub === "s") {
           await ctx.telegram.edit(invocation.message, "正在读取 V2 插件仓库…");
@@ -50,17 +51,25 @@ export default function createTpm(host: PluginHost, releases: PluginReleases, ro
           await ctx.telegram.edit(invocation.message, "默认模块由程序管理，不通过 TPM 替换或卸载"); return;
         }
         if (sub === "remove" || sub === "rm") {
+          stage = "unload";
           await releases.remove(id);
           await ctx.telegram.edit(invocation.message, `${id} 已卸载，配置数据已保留`);
         } else {
           await ctx.telegram.edit(invocation.message, `正在下载并构建 ${id}…`);
           const candidate = await repository(ctx, "build", id);
           if (candidate.id !== id || !candidate.revision) throw new Error("Invalid candidate");
+          stage = "activate";
           await releases.activate(id, candidate.revision);
           await ctx.telegram.edit(invocation.message, `${id} 已${installed ? "更新" : "安装"}并加载`);
         }
-      } catch {
-        if (!ctx.signal.aborted) await ctx.telegram.edit(invocation.message, "插件操作失败；请检查网络、V2 插件是否存在及运行日志");
+      } catch (error) {
+        const allowed = new Set(["STATE", "CONFLICT", "STOP", "ACTIVATE", "RESTORE", "SPAWN_FAILED",
+          "EXIT_FAILED", "TIMED_OUT", "OUTPUT_LIMIT", "IO_FAILED", "CONTROL_FAILED", "CLOSED", "ABORTED"]);
+        const value = error && typeof error === "object" && "code" in error ? error.code : undefined;
+        const code = typeof value === "string" && allowed.has(value) ? value : "UNKNOWN";
+        ctx.log.error("tpm.operation_failed", {stage, code});
+        if (!ctx.signal.aborted) await ctx.telegram.edit(invocation.message,
+          `插件操作失败：${stage} / ${code}\n可在服务器运行 node scripts/plugin-repository.cjs search 检查仓库访问`);
       } finally {busy = false;}
     }}},
   });
