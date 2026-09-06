@@ -8,3 +8,7 @@ export function isOwner(message: MessageEnvelope, ownerId = process.env.TB_OWNER
 export function requireOwner(message: MessageEnvelope): void {
   if (!isOwner(message)) throw new Error("OWNER_REQUIRED");
 }
+
+export async function isPrivileged(message: MessageEnvelope): Promise<boolean> {
+  return isOwner(message);
+}
