@@ -168,7 +168,7 @@ class HelpPlugin extends Plugin {
         const basic = formatBasicCommands(commands, mainPlanner);
         const prefixLine = `❕ <b>指令前缀：</b> ${prefixes.map(p => `<code>${htmlEscape(p)}</code>`).join(" • ")}`;
         const helpTip = `💡 <code>${mainPrefix}help [命令]</code> 查看详情 | <code>${mainPrefix}tpm search</code> 显示远程插件列表`;
-        const links = `🔗 <a href='https://github.com/MiCat-S/TeleBox'>📦仓库</a> | <a href='https://github.com/MiCat-S/TeleBox-Plugins'>🔌插件</a>`;
+        const links = `🔗 <a href='https://github.com/MiCat-S/Mi-Box'>📦仓库</a> | <a href='https://github.com/MiCat-S/Mi-Box-Plugins'>🔌插件</a>`;
 
         await msg.edit({
           text: [header, "", basic.text, "", prefixLine, helpTip, links].join("\n"),

@@ -104,8 +104,8 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
   assert.match(text, /其他命令\n\.one  \.two/);
   assert.match(text, /发送 \.help <命令> 查看详细说明/);
   assert.equal(text.includes(".tpm search"), false);
-  assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox"')));
-  assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox-Plugins"')));
+  assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/Mi-Box"')));
+  assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/Mi-Box-Plugins"')));
   assert.equal(messages.length, 1);
   for (const entry of messages) assert.equal(entry.message, f.message);
 });

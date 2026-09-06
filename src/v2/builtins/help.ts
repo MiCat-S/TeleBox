@@ -235,7 +235,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
         if (commands.some((entry) => entry.name === "tpm")) {
           add(`${code(prefix + "tpm search")} 显示远程插件列表`);
         }
-        add(`<a href="https://github.com/MiCat-S/TeleBox">Mi Box 仓库</a> | <a href="https://github.com/MiCat-S/TeleBox-Plugins">插件仓库</a>`);
+        add(`<a href="https://github.com/MiCat-S/Mi-Box">Mi Box 仓库</a> | <a href="https://github.com/MiCat-S/Mi-Box-Plugins">插件仓库</a>`);
         output = pages(blocks);
       } else {
         const target = resolve(query, plugins, configuration.prefixes, aliases);

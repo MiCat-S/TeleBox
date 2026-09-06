@@ -27,7 +27,7 @@ export const tpmUpdateEmitter = new EventEmitter();
 export const TPM_UPDATE_EVENT = "progress";
 
 const PLUGINS_INDEX_URL =
-  "https://raw.githubusercontent.com/MiCat-S/TeleBox-Plugins/main/plugins.json";
+  "https://raw.githubusercontent.com/MiCat-S/Mi-Box-Plugins/main/plugins.json";
 const PLUGIN_PATH = path.join(process.cwd(), "plugins");
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const REQUEST_TIMEOUT_MS = 20000;
