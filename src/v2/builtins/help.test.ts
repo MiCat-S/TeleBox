@@ -97,13 +97,13 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
   const f = fixture(t, [plugin("ping"), plugin("tools", ["one", "two"]), plugin("help", ["help", "h"])]);
   const messages = await f.run();
   const text = visible(messages);
-  assert.match(text, /TeleBox By Cat/);
+  assert.match(text, /TeleBox 控制台/);
   assert.match(text, /5 个命令/);
   assert.match(text, /基础命令\n\.ping/);
   assert.match(text, /功能模块/);
   assert.match(text, /模块 tools\n\.one\n\.two/);
   assert.match(text, /\.help \[命令或模块名\]/);
-  assert.match(text, /\.tpm search/);
+  assert.equal(text.includes(".tpm search"), false);
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox"')));
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox-Plugins"')));
   assert.equal(messages[1].kind, "reply");

@@ -19,6 +19,14 @@ function escape(value: string): string {
 
 function code(value: string): string { return `<code>${escape(value)}</code>`; }
 
+const pluginIcons: Readonly<Record<string, string>> = {
+  ai: "🤖", da: "🛡️", dc: "🌐", dme: "🗑️", gt: "🌍", ids: "🪪",
+  ip: "📍", nodeseek: "🔎", rate: "💱", sum: "📝", yvlu: "🖼️",
+  memory: "🧠", ping: "🏓", status: "📊", env: "⚙️", alias: "🔗",
+  prefix: "📌", loglevel: "🔊", help: "❔",
+};
+function pluginTitle(id: string): string { return `${pluginIcons[id.toLowerCase()] ?? "🧩"} ${escape(id)}`; }
+
 function plainBlocks(text: string): Block[] {
   const result: Block[] = [];
   let html = "";
@@ -169,20 +177,22 @@ export function createHelp(host: HelpHost): PluginDefinition {
       const add = (html: string): void => { blocks.push(...format.normalize(html)); };
       const query = invocation.args.join(" ").trim();
       if (!query) {
-        add(`<b>TeleBox By Cat</b> | ${commands.length} 个命令`);
-        add(`<b>指令前缀：</b> ${configuration.prefixes.map(code).join(" · ")}`);
+        add(`<b>TeleBox 控制台</b>  <code>${commands.length} 个命令</code>`);
+        add(`前缀 ${configuration.prefixes.map(code).join(" · ")}　·　发送 ${code(prefix + "help 模块")} 查看详情`);
         add(`<b>基础命令</b>`);
         const singles = plugins.filter((plugin) => plugin.commands.length === 1).flatMap((plugin) => plugin.commands.map((entry) => entry.name));
         const basic = singles.length ? singles : commands.map((entry) => entry.name);
         if (!basic.length) add("暂无基础命令");
         for (const name of [...new Set(basic)].sort()) add(commandLine(name, prefix, aliases));
         add(`使用 ${code(prefix + "help [命令或模块名]")} 查看详情`);
-        add(`${code(prefix + "tpm search")} 显示远程插件列表`);
+        if (commands.some((entry) => entry.name === "tpm")) {
+          add(`${code(prefix + "tpm search")} 显示远程插件列表`);
+        }
         add(`<a href="https://github.com/MiCat-S/TeleBox">TeleBox 仓库</a> | <a href="https://github.com/MiCat-S/TeleBox-Plugins">插件仓库</a>`);
         output = pages(blocks);
         const modules: Block[] = [];
         for (const plugin of [...plugins].filter((entry) => entry.commands.length !== 1).sort((a, b) => a.id.localeCompare(b.id))) {
-          modules.push(...format.normalize(`<b>模块 ${escape(plugin.id)}</b>`));
+          modules.push(...format.normalize(`<b>${pluginIcons[plugin.id.toLowerCase()] ?? "🧩"} 模块 ${escape(plugin.id)}</b>`));
           if (!plugin.commands.length) modules.push(...format.normalize("无可调用命令"));
           for (const entry of [...plugin.commands].sort((a, b) => a.name.localeCompare(b.name))) {
             modules.push(...format.normalize(commandLine(entry.name, prefix, aliases)));
@@ -201,7 +211,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
           add(`使用 ${code(prefix + "help")} 查看所有命令`);
         } else {
           const { plugin, usage } = target;
-          add(`<b>${escape(plugin.id)} 帮助</b>`);
+          add(`<b>${pluginTitle(plugin.id)} 帮助</b>`);
           add("<b>功能描述</b>");
           blocks.push(...format.description(plugin.description || "暂无描述信息"));
           add("<b>命令</b>");
