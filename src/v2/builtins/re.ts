@@ -21,6 +21,8 @@ export default function createRe() {
           for (let index = 0; index < repeat; index++) {
             await client.forwardMessages(target!, {messages: ids, fromPeer: source!});
           }
+          const command = invocation.message.raw as {delete?: () => Promise<unknown>};
+          if (typeof command.delete === "function") await command.delete();
         });
       } catch {
         if (!ctx.signal.aborted) await ctx.telegram.edit(invocation.message, "复读失败：目标消息可能禁止转发");
