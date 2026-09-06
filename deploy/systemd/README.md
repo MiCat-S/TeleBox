@@ -1,7 +1,7 @@
 # MiBot systemd 运维
 
 初次安装见 [INSTALL.md](../../INSTALL.md)。
-更新由独立的 `mibot-update.service` 临时任务执行，避免更新任务随着
+更新由独立的 `mibot-update-*` 临时任务执行，避免更新任务随着
 主服务重启而被终止。查看更新结果：
 
 ```sh

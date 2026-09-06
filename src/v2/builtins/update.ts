@@ -1,6 +1,7 @@
 import {definePlugin, type PluginContext} from "../sdk";
 import {randomUUID} from "node:crypto";
 import {readFile, unlink} from "node:fs/promises";
+import {setTimeout as delay} from "node:timers/promises";
 import path from "node:path";
 import {isOwner} from "../permissions";
 
@@ -16,6 +17,26 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
+  const reportFailure = async (ctx: PluginContext, receipt: Receipt, text: string): Promise<void> => {
+    await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true}, text);
+    await clear(ctx, receipt);
+    try { await unlink(resultFile); } catch {}
+  };
+  const watchResult = (ctx: PluginContext, receipt: Receipt): void => {
+    void ctx.tasks.run("update:result", async signal => {
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        signal.throwIfAborted();
+        try {
+          const result = JSON.parse(await readFile(resultFile, "utf8")) as {status?: unknown};
+          if (result.status === "failed") {
+            await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n更新任务未完成，服务保持当前版本。请稍后重试或查看服务器日志。");
+            return;
+          }
+        } catch {}
+        await delay(1000, undefined, {signal});
+      }
+    });
+  };
   const definition = definePlugin({apiVersion: 1, id: "update", description: "检查并更新 MiBot",
     setup(ctx) { context = ctx; },
     cleanup() { context = undefined; },
@@ -53,14 +74,16 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
-          await ctx.processes.run("/usr/bin/systemd-run", ["--quiet", "--collect", "--unit=mibot-update",
+          const unit = `mibot-update-${receipt.requestedAt}`;
+          await ctx.processes.run("/usr/bin/systemd-run", ["--quiet", "--collect", `--unit=${unit}`,
             "--service-type=oneshot", "/usr/bin/bash", path.join(root, "scripts/update-service.sh"), root],
             {timeoutMs: 5000, maxOutputBytes: 2000});
           submitted = true;
         } catch (error) {
-          await clear(ctx, receipt);
-          throw error;
+          await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n无法启动更新任务，请检查 systemd 服务权限和日志。");
+          return;
         }
+        watchResult(ctx, receipt);
         return;
       }
       await ctx.telegram.edit(invocation.message, `用法：${invocation.prefix}update ver|check|run|auto`);
