@@ -61,7 +61,16 @@ function protocolSink(compatibility: () => ProtocolCompatibility | undefined): (
 
 async function loadDaily(host: PluginHost, root: string, prepared: PreparedArtifact[]): Promise<void> {
   for (const id of DAILY_PLUGINS) {
-    const artifact = await prepareArtifact(path.join(root, id));
+    const direct = path.join(root, id);
+    let directory = direct;
+    try {
+      const metadata = JSON.parse(await fs.readFile(path.join(direct, "manifest.json"), "utf8")) as {revision?: string};
+      if (typeof metadata.revision === "string" && /^[a-f0-9]{64}$/.test(metadata.revision)) {
+        const versioned = path.join(path.dirname(root), "v2-plugins", id, metadata.revision);
+        try { await fs.access(path.join(versioned, "manifest.json")); directory = versioned; } catch {}
+      }
+    } catch {}
+    const artifact = await prepareArtifact(directory);
     if (artifact.artifact.manifest.id !== id) {
       artifact.release();
       throw new Error("Plugin artifact identity mismatch");
