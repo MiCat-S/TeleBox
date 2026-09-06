@@ -3,7 +3,7 @@ import {readFile} from "node:fs/promises";
 import path from "node:path";
 import {isOwner} from "../permissions";
 
-export default function createUpdate(root = process.cwd()) {
+export default function createUpdate(root = process.cwd(), ownerId?: string) {
   return definePlugin({apiVersion: 1, id: "update", description: "检查并更新 MiBot",
     commands: {update: {description: "查看版本与自动更新状态", async handle(invocation, ctx) {
       const sub = invocation.args[0]?.toLowerCase() ?? "run";
@@ -25,7 +25,7 @@ export default function createUpdate(root = process.cwd()) {
         return;
       }
       if (sub === "run" || sub === "now" || sub === "check") {
-        if (!isOwner(invocation.message)) {
+        if (!isOwner(invocation.message, ownerId)) {
           await ctx.telegram.edit(invocation.message, "只有账号所有者可以更新 MiBot");
           return;
         }

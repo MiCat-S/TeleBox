@@ -170,7 +170,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     const selection = releaseStorage.json<ReleaseState>("tpm", "releases.json", {schemaVersion: 1, plugins: {}});
     releases = new PluginReleases(host, {artifactRoot: path.join(root, "dist/v2-plugins"), store: selection});
     await host.load(createTpm(host, releases, root, selfId));
-    await host.load(createUpdate(root));
+    await host.load(createUpdate(root, selfId));
     await host.load(createAutofix(root));
     await loadDaily(host, pluginRoot, prepared);
     for (const [id, selected] of Object.entries((await selection.read()).plugins)) {
