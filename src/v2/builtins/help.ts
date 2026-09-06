@@ -225,10 +225,11 @@ export function createHelp(host: HelpHost): PluginDefinition {
           add(`使用 ${code(prefix + "help")} 查看所有命令`);
         } else {
           const { plugin, usage } = target;
-          add(`<b>${pluginTitle(plugin.id)} 帮助</b>`);
-          add("<b>功能描述</b>");
+          add(`<b>${pluginTitle(plugin.id)} 帮助</b>　<code>${plugin.commands.length} 个命令</code>`);
+          add("━━━━━━━━━━━━");
+          add("<b>功能说明</b>");
           blocks.push(...format.description(plugin.description || "暂无描述信息"));
-          add("<b>命令</b>");
+          add("<b>可用命令</b>");
           if (!plugin.commands.length) add("无可调用命令");
           for (const entry of [...plugin.commands].sort((a, b) => a.name.localeCompare(b.name))) {
             add(commandLine(entry.name, prefix, aliases));
