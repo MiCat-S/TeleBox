@@ -19,6 +19,8 @@ npm start
 
 在核心仓库执行；插件仓库须按安装指南放在同级目录。
 `npm start` 用于前台验证，长期运行使用 systemd。
+完成登录并停止前台实例后，可运行 `npm run service:install` 一键安装
+并启用 systemd 服务，要求详见安装指南。
 
 ## 功能
 

@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node dist/v2/index.js --serve",
     "login": "node scripts/login-v2.cjs",
+    "service:install": "bash scripts/install-service.sh",
     "dev": "node scripts/package-v2-daily.cjs && node dist/v2/index.js --serve",
     "build": "node scripts/package-v2-daily.cjs",
     "test": "node scripts/test-v2.cjs",
