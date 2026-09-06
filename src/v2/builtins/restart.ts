@@ -1,11 +1,11 @@
 import {definePlugin} from "../sdk";
-import {isPrivileged} from "../permissions";
+import {isOwner} from "../permissions";
 
-export default function createRestart() {
+export default function createRestart(ownerId: string) {
   return definePlugin({apiVersion: 1, id: "restart", description: "重启 TeleBox systemd 服务",
     commands: {restart: {description: "重启当前 TeleBox 服务", ignoreEdited: true, async handle(invocation, ctx) {
       ctx.signal.throwIfAborted();
-      if (!await isPrivileged(invocation.message)) {
+      if (!isOwner(invocation.message, ownerId)) {
         await ctx.telegram.edit(invocation.message, "没有重启服务的权限");
         return;
       }

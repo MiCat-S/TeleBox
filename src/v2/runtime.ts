@@ -163,7 +163,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     await host.load(createRe());
     await host.load(createAgent());
     await host.load(createExec());
-    await host.load(createRestart());
+    await host.load(createRestart(selfId));
     await host.load(createBf(root));
     await host.load(createLeech());
     await host.load(createSudo());
