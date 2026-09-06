@@ -4,12 +4,22 @@ umask 077
 
 root=${1:-/root/mibot}
 [[ -d "$root/.git" ]] || exit 2
-mkdir -p "$root/temp"
-mkdir -p /run/lock
 
 result_file="$root/temp/update-result.json"
 status="failed"
 reason="更新服务异常退出"
+mkdir -p "$root/temp"
+
+if ! mkdir -p /run/lock; then
+  reason="无法创建 /run/lock，可能缺少 systemd 服务权限"
+  /usr/bin/node -e '
+const fs = require("fs");
+const [status, reason, target] = process.argv.slice(1);
+fs.writeFileSync(target, JSON.stringify({status, reason}), "utf8");
+fs.chmodSync(target, 0o600);
+' "$status" "$reason" "$result_file"
+  exit 1
+fi
 
 write_result() {
   /usr/bin/node -e '
