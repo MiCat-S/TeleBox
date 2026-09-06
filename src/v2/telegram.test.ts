@@ -9,6 +9,7 @@ import { returnBigInt } from "teleproto/Helpers";
 import { getPeerId } from "teleproto/Utils";
 import { NewMessage, NewMessageEvent } from "teleproto/events/NewMessage";
 import { EditedMessage } from "teleproto/events/EditedMessage";
+import { BinaryReader } from "teleproto/extensions/BinaryReader";
 import type { EventBuilder } from "teleproto/events/common";
 import type { MessageEnvelope } from "./sdk";
 import { ResourceScope } from "./lifecycle";
@@ -169,6 +170,21 @@ test("supplied self ID recognizes Saved Messages without getMe", () => {
   const raw = message({ peerId: new Api.PeerUser({ userId: returnBigInt(SELF) }), out: false });
   assert.equal(messageEnvelope(raw, { selfId: SELF }).saved, true);
   assert.equal(messageEnvelope(raw).saved, false);
+});
+
+test("wire-decoded new Saved Messages with null editDate stay unedited", () => {
+  const sent = message({peerId: new Api.PeerUser({userId: returnBigInt(SELF)}), out: false});
+  const decoded = new BinaryReader(sent.getBytes()).tgReadObject() as Api.Message;
+  assert.equal(decoded.editDate, null);
+  const envelope = messageEnvelope(decoded, {selfId: SELF});
+  assert.equal(envelope.saved, true);
+  assert.equal(envelope.edited, false);
+  assert.equal(messageEnvelope(decoded, {selfId: SELF, edited: true}).edited, true);
+});
+
+test("wire-decoded edited messages preserve their edit marker", () => {
+  const decoded = new BinaryReader(message({editDate: 1_700_000_010}).getBytes()).tgReadObject() as Api.Message;
+  assert.equal(messageEnvelope(decoded).edited, true);
 });
 
 test("missing sender IDs use only local peer and supplied account identity", () => {

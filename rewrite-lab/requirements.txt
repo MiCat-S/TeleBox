@@ -1,0 +1,6 @@
+Telethon==1.44.0
+pyaes==1.6.1
+pyasn1==0.6.4
+rsa==4.9.1
+python-socks[asyncio]==3.0.0
+async-timeout==5.0.1

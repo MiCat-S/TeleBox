@@ -1,11 +1,17 @@
 // This explicit offline check cannot log in, open user configuration or run
 // installed plugins. Live startup is gated on account and migration validation.
 export async function main(args: readonly string[]): Promise<void> {
-  if (args.length !== 1 || args[0] !== "--check") {
-    throw new Error("V2 online startup is not available yet; use --check for the offline runtime check");
+  if (args.length === 1 && args[0] === "--check") {
+    const {offlineCheck} = await import("./offline-check.js");
+    process.stdout.write(JSON.stringify(await offlineCheck()) + "\n");
+    return;
   }
-  const {offlineCheck} = await import("./offline-check.js");
-  process.stdout.write(JSON.stringify(await offlineCheck()) + "\n");
+  if (args.length === 1 && args[0] === "--serve") {
+    const {serve} = await import("./runtime.js");
+    await serve();
+    return;
+  }
+  throw new Error("Usage: node dist/v2/index.js --check|--serve");
 }
 
 if (require.main === module) {

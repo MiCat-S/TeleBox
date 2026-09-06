@@ -2,11 +2,11 @@
 
 ## Status and activation gates
 
-`telebox-v2.service` is a SERVICE TEMPLATE ONLY. The initial
-`dist/v2/index.js` CLI is OFFLINE ONLY, not the migrated Telegram service.
-Do NOT install, enable, or start this unit until authorized real-login tests
-and the full migration gates in `rewrite-lab/REWRITE_PLAN.md` pass. A successful
-offline run or build does not establish production readiness.
+`telebox-v2.service` is a SERVICE TEMPLATE ONLY. `dist/v2/index.js --serve`
+is the migrated Telegram service entrypoint. Do NOT install, enable, or start
+this unit until authorized real-login tests and the full migration gates in
+`rewrite-lab/REWRITE_PLAN.md` pass. A successful offline run or build does not
+establish production readiness.
 
 Activation requires full module/permission/configuration compatibility checks,
 real Telegram critical-path evidence, lifecycle cleanup and fault-recovery tests,
@@ -22,13 +22,15 @@ Run from the repository root with Node 24 and the existing dependencies installe
 
 ```sh
 node scripts/test-v2.cjs
-node scripts/build-v2.cjs
+node scripts/package-v2-daily.cjs
 node dist/v2/index.js --check
 ```
 
-The final command invokes the application's initial offline CLI. Its eventual
-service entrypoint must satisfy the activation gates above. The default production
-build excludes `*.test.ts`; `--test` includes them at every directory depth.
+The packaging command builds the Core runtime and atomically promotes the exact
+11 daily plugin artifacts into `dist/v2-plugins-active`. The final command invokes
+the offline integration check; the online `--serve` entrypoint remains subject to
+the activation gates above. The default production build excludes `*.test.ts`;
+`--test` includes them at every directory depth.
 The test runner checks both v2 TypeScript projects and includes nested Core tests,
 build-chain tests, and `*-v2.test.js` / `*-v2-<component>.test.js` extension tests from
 the sibling `TeleBox-Plugins` checkout on the matching `codex/telebox-runtime-v2`
@@ -97,8 +99,7 @@ Before any separately approved deployment, verify:
 ## Stop, restart, and future switching
 
 `Restart=on-failure` restarts failures after five seconds, with a three-start
-limit per minute. A successful offline CLI exit does not create a restart loop.
-An explicit systemd stop is not a failure restart request.
+limit per minute. An explicit systemd stop is not a failure restart request.
 
 On stop, systemd sends `SIGTERM` to the entire control group. The application must
 handle that signal and explicitly cancel/drain work, close listeners, timers,

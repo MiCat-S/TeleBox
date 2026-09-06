@@ -15,6 +15,7 @@ function run(args) {
 const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
 run([tsc, '-p', 'tsconfig.v2.json']);
 run([tsc, '-p', '../TeleBox-Plugins/tsconfig.v2.json']);
+run([path.join(__dirname, 'package-v2-daily.cjs')]);
 run([path.join(__dirname, 'build-v2.cjs'), '--test']);
 const tests = [];
 function visit(directory) {
@@ -28,6 +29,7 @@ visit(path.join(root, 'dist/v2'));
 if (!tests.length) throw new Error('No compiled v2 tests found');
 tests.push(path.join(__dirname, 'build-v2.test.cjs'));
 tests.push(path.join(__dirname, 'build-v2-plugin.test.cjs'));
+tests.push(path.join(__dirname, 'server-v2-check.test.cjs'));
 const extensionTests = fs.readdirSync(path.join(plugins, 'scripts'), {withFileTypes: true})
   .filter(entry => entry.isFile() && /-v2(?:-[a-z0-9-]+)?\.test\.js$/.test(entry.name))
   .map(entry => path.join(plugins, 'scripts', entry.name));

@@ -1,5 +1,5 @@
-# SERVICE TEMPLATE ONLY. The initial index CLI is OFFLINE ONLY.
-# Do not install or enable until the README migration/login gates pass.
+# SERVICE TEMPLATE ONLY. Do not install or enable until the README
+# migration, account-exclusivity, live-command and rollback gates pass.
 [Unit]
 Description=TeleBox v2
 Wants=network-online.target
@@ -11,7 +11,7 @@ StartLimitBurst=3
 Type=simple
 WorkingDirectory=/root/telebox
 # Operator must verify this absolute Node 24 binary path.
-ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js
+ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js --serve
 Environment=NODE_ENV=production
 Restart=on-failure
 RestartSec=5s

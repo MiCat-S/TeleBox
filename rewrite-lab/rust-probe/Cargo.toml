@@ -1,0 +1,19 @@
+[package]
+name = "telebox-rewrite-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+grammers-client = "=0.10.0"
+grammers-tl-types = "=0.10.0"
+# grammers-crypto 0.10.0 calls the rc0 bool/num-bigint-0.4 API.
+glass_pumpkin = "=2.0.0-rc0"
+
+[dev-dependencies]
+grammers-session = "=0.10.0"
+serde_json = "1"
+base64 = "0.22"
+
+[lib]
+path = "probe.rs"

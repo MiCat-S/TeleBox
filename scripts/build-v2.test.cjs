@@ -310,7 +310,7 @@ test('v2 typecheck is strict, noEmit, and independent from legacy inputs', (t) =
 test('service template preserves direct startup, group cleanup, and journal logging', () => {
   const service = fs.readFileSync(path.join(PROJECT_ROOT, 'deploy/systemd/telebox-v2.service'), 'utf8');
   const directives = service.split(/\r?\n/).filter((line) => line && !line.startsWith('#') && !line.startsWith('['));
-  assert.ok(directives.includes('ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js'));
+  assert.ok(directives.includes('ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js --serve'));
   assert.ok(directives.includes('WorkingDirectory=/root/telebox'));
   for (const directive of [
     'Restart=on-failure', 'RestartSec=5s', 'KillSignal=SIGTERM',
@@ -321,7 +321,7 @@ test('service template preserves direct startup, group cleanup, and journal logg
   }
   assert.equal(directives.filter((line) => line.startsWith('Exec')).length, 1);
   assert.match(service, /SERVICE TEMPLATE ONLY/);
-  assert.match(service, /OFFLINE ONLY/);
+  assert.match(service, /rollback gates pass/);
   const readme = fs.readFileSync(path.join(PROJECT_ROOT, 'deploy/systemd/README.md'), 'utf8');
   assert.match(readme, /Do NOT install, enable, or start/);
   assert.match(readme, /separate oneshot controller unit/);

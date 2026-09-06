@@ -1,0 +1,8 @@
+.venv/
+results/
+bin/
+__pycache__/
+node_modules/
+!package-lock.json
+.tools/
+target/

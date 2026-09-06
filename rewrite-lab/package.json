@@ -1,0 +1,10 @@
+{
+  "name": "telebox-rewrite-lab",
+  "private": true,
+  "scripts": {
+    "test": "node --test *.test.cjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

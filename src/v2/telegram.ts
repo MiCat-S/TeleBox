@@ -65,7 +65,8 @@ export function messageEnvelope(message: Api.Message, options: EnvelopeOptions =
     text: message.message ?? "",
     outgoing: Boolean(message.out),
     saved: Boolean(savedPeer) || (options.selfId !== undefined && chatId === options.selfId),
-    edited: options.edited === true || message.editDate !== undefined,
+    // Wire decoding uses null for absent optional fields; constructors use undefined.
+    edited: options.edited === true || message.editDate != null,
     forwarded: Boolean(message.fwdFrom),
     replyToId: reply?.replyToMsgId,
     topicId: reply?.replyToTopId ?? (reply?.forumTopic ? reply.replyToMsgId : undefined),

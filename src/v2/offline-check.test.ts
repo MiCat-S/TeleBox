@@ -26,14 +26,14 @@ test("offline CLI integrates built-ins, SQLite reload, services and admission wi
   assert.deepEqual(fs.readdirSync(root), ["config.json"]);
 });
 
-test("CLI requires explicit offline mode and does not touch the current directory", t => {
+test("CLI rejects unknown modes and does not touch the current directory", t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "telebox-check-mode-")));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   for (const args of [[], ["--start"], ["--check", "--start"]]) {
     const result = spawnSync(process.execPath, [path.join(__dirname, "index.js"), ...args], {cwd: root, encoding: "utf8", timeout: 5000});
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");
-    assert.match(result.stderr, /online startup is not available/);
+    assert.match(result.stderr, /Usage: node dist\/v2\/index\.js --check\|--serve/);
     assert.deepEqual(fs.readdirSync(root), []);
   }
 });
