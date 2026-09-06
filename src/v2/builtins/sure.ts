@@ -40,5 +40,18 @@ export default function createSure() {
       }
       await ctx.telegram.edit(invocation.message, `用法：${invocation.prefix}sure user|chat|msg add|del ...`);
     }}},
+    listeners: [{handle: async (message, ctx) => {
+      if (message.outgoing || !message.senderId || !message.text.trim()) return;
+      const store = ctx.storage.json<SureConfig>("config.json", defaults);
+      const current = await store.read();
+      if (!current.users.includes(message.senderId) ||
+          (current.chats.length > 0 && !current.chats.includes(message.chatId))) return;
+      const replacement = current.messages[message.text] ?? current.messages[`_command:${message.text.split(/\s+/, 1)[0]}`];
+      if (!replacement || replacement.startsWith("_command:")) return;
+      await ctx.telegram.withClient(async client => {
+        const raw = message.raw as {peerId?: unknown} | undefined;
+        if (raw?.peerId) await client.sendMessage(raw.peerId as never, {message: replacement});
+      });
+    }}],
   });
 }
