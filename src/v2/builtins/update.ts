@@ -18,7 +18,7 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
   const reportFailure = async (ctx: PluginContext, receipt: Receipt, text: string): Promise<void> => {
-    await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true}, text);
+    await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true}, text, {parseMode: "html"});
     await clear(ctx, receipt);
     try { await unlink(resultFile); } catch {}
   };
@@ -74,11 +74,14 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
+          await ctx.processes.run("/usr/bin/test", ["-f", "/etc/systemd/system/mibot-update.service"],
+            {timeoutMs: 3000, maxOutputBytes: 2000});
+          await ctx.processes.run("/usr/bin/systemctl", ["daemon-reload"], {timeoutMs: 5000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", "mibot-update.service"],
             {timeoutMs: 5000, maxOutputBytes: 2000});
           submitted = true;
         } catch (error) {
-          await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n无法启动更新任务，请检查 systemd 服务权限和日志。");
+          await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n无法启动更新任务，请先确认 /etc/systemd/system/mibot-update.service 存在。\n执行：<code>systemctl status mibot-update.service --no-pager</code>\n并贴日志继续排障。");
           return;
         }
         watchResult(ctx, receipt);
