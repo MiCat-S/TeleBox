@@ -12,6 +12,7 @@ import {PrefixEnvStore, prefixesFromEnv} from "./prefixes";
 import {ResourceScope} from "./lifecycle";
 import {RuntimeLogger, LogLevel} from "./logging";
 import {definePlugin, PLUGIN_API_VERSION, type MessageEnvelope, type TelegramPort} from "./sdk";
+import createMemory from "./builtins/memory";
 
 export async function offlineCheck() {
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "telebox-v2-check-")));
@@ -45,6 +46,7 @@ export async function offlineCheck() {
     await host.load(createAlias(host));
     await host.load(createPrefix(host, new PrefixEnvStore(path.join(directory, ".env"))));
     await host.load(createLogLevel(logger));
+    await host.load(createMemory());
     await host.dispatchPrimary({...source, text: ".alias set smoke probe"});
     await host.dispatchPrimary({...source, text: ".smoke"});
     await host.dispatchPrimary({...source, text: ".help"});
