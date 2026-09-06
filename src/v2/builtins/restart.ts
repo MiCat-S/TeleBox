@@ -13,10 +13,10 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
-  const definition = definePlugin({apiVersion: 1, id: "restart", description: "重启 Mi Box systemd 服务",
+  const definition = definePlugin({apiVersion: 1, id: "restart", description: "重启 MiBot systemd 服务",
     setup(ctx) { context = ctx; },
     cleanup() { context = undefined; },
-    commands: {restart: {description: "重启当前 Mi Box 服务", ignoreEdited: true, async handle(invocation, ctx) {
+    commands: {restart: {description: "重启当前 MiBot 服务", ignoreEdited: true, async handle(invocation, ctx) {
       ctx.signal.throwIfAborted();
       if (!isOwner(invocation.message, ownerId)) {
         await ctx.telegram.edit(invocation.message, "没有重启服务的权限");
@@ -30,7 +30,7 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
       const receipt: Receipt = {ownerId, chatId: invocation.message.chatId, messageId: invocation.message.id,
         requestedAt: Date.now(), bootId};
       try {
-        await ctx.telegram.edit(invocation.message, "<b>Mi Box 重启</b>\n正在提交重启请求…", {parseMode: "html"});
+        await ctx.telegram.edit(invocation.message, "<b>MiBot 重启</b>\n正在提交重启请求…", {parseMode: "html"});
         ctx.signal.throwIfAborted();
         await store(ctx).update(() => ({pending: receipt}));
       } catch (error) {
@@ -38,7 +38,7 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
         throw error;
       }
       try {
-        await ctx.processes.run("/usr/bin/systemctl", ["--no-block", "restart", "telebox-v2.service"], {timeoutMs: 5000, maxOutputBytes: 2000});
+        await ctx.processes.run("/usr/bin/systemctl", ["--no-block", "restart", "mibot.service"], {timeoutMs: 5000, maxOutputBytes: 2000});
       } catch {
         if (!ctx.signal.aborted && !shutdownSignal?.aborted) {
           submitted = false;
@@ -62,7 +62,7 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
         return;
       }
       await ctx.telegram.edit({id: pending.messageId, chatId: pending.chatId, text: "", outgoing: true},
-        "<b>Mi Box 重启成功</b>\n服务已就绪", {parseMode: "html"});
+        "<b>MiBot 重启成功</b>\n服务已就绪", {parseMode: "html"});
       await clear(ctx, pending);
     } catch {
       if (!ctx.signal.aborted) ctx.log.error("restart.receipt_failed");

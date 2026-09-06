@@ -71,6 +71,51 @@ function fixture(t: TestContext, configure?: (store: ReleaseOptions["store"]) =>
   return {root, host, releases, store, storage, options, build, events, hooks};
 }
 
+test("uninstall removes selection and commands while preserving plugin data", async t => {
+  const f = fixture(t);
+  const revision = f.build("a");
+  f.hooks.setup = async (_version, ctx) => {
+    await ctx.storage.json("data.json", {value: 7}).update(data => data);
+  };
+  await f.releases.activate("fixture", revision);
+  await f.releases.remove("fixture");
+  assert.equal(f.host.pluginState("fixture"), undefined);
+  assert.deepEqual((await f.store.read()).plugins, {});
+  assert.ok(fs.existsSync(path.join(f.root, "assets/fixture/data.json")));
+  assert.deepEqual(f.releases.snapshot().generations, []);
+});
+
+test("saved selections reload into a new release manager after shutdown", async t => {
+  const f = fixture(t);
+  const revision = f.build("a");
+  await f.releases.activate("fixture", revision);
+  await f.releases.shutdown(100);
+  const next = new PluginReleases(f.host, f.options);
+  try {
+    for (const [id, selected] of Object.entries((await f.store.read()).plugins)) {
+      await next.activate(id, selected.current);
+    }
+    assert.equal(f.host.pluginState("fixture"), "active");
+    assert.equal(next.snapshot().generations[0].revision, revision);
+    await f.host.dispatchPrimary(message);
+    assert.equal(f.events.at(-1), "handle:a");
+  } finally {await next.shutdown(100);}
+});
+
+test("failed uninstall state commit restores the loaded generation", async t => {
+  let fail = false;
+  const f = fixture(t, store => ({read: store.read.bind(store), update: async (...args) => {
+    if (fail) throw new Error("write failed");
+    return store.update(...args);
+  }}));
+  const revision = f.build("a");
+  await f.releases.activate("fixture", revision);
+  fail = true;
+  await assert.rejects(f.releases.remove("fixture"), /write failed/);
+  assert.equal(f.host.pluginState("fixture"), "active");
+  assert.equal((await f.store.read()).plugins.fixture.current, revision);
+});
+
 test("activation stops the old generation before setup, and rollback preserves current data", async t => {
   const f = fixture(t);
   const a = f.build("a");

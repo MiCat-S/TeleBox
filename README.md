@@ -1,4 +1,4 @@
-# Mi Box
+# MiBot
 
 Telegram UserBot，基于 Node.js 24、TypeScript 和 Teleproto。
 V2 预编译后由 Node 直接运行，生产服务使用 systemd。
@@ -23,10 +23,28 @@ npm start
 
 ## 功能
 
-默认插件：ai、da、dc、dme、gt、ids、ip、nodeseek、rate、sum、
-yvlu、aban、dig、pangu、subinfo。
+默认命令：
 
-常用命令：`.help`、`.ai`、`.gt`、`.memory`、`.sysinfo`、`.restart`。
+```text
+.agent .ai .gt .memory .ping .status .sysinfo .tpm .update
+.alias .autofix .bf .env .exec .h .help .loglevel
+.prefix .restart .sudo .ver .version
+```
+
+其他 V2 扩展从插件仓库按需安装：
+
+```text
+.tpm search
+.tpm install dig
+.tpm list
+.tpm update dig
+.tpm remove dig
+```
+
+TPM 仅允许账号所有者管理扩展。安装和更新从配套插件仓库的 main
+下载源码，短时构建后加载；安装记录会在服务重启时恢复。
+卸载保留配置数据。扩展代码具有运行账号的权限，安装前确认信任。
+
 参数以 `.help 命令` 为准。旧版插件仍在迁移，不能把任意旧版 `.ts`
 直接作为 V2 插件安装。subinfo 文件导出等功能尚未迁移。
 

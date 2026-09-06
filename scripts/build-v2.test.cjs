@@ -308,10 +308,10 @@ test('v2 typecheck is strict, noEmit, and independent from legacy inputs', (t) =
 });
 
 test('service template preserves direct startup, group cleanup, and journal logging', () => {
-  const service = fs.readFileSync(path.join(PROJECT_ROOT, 'deploy/systemd/telebox-v2.service'), 'utf8');
+  const service = fs.readFileSync(path.join(PROJECT_ROOT, 'deploy/systemd/mibot.service'), 'utf8');
   const directives = service.split(/\r?\n/).filter((line) => line && !line.startsWith('#') && !line.startsWith('['));
-  assert.ok(directives.includes('ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js --serve'));
-  assert.ok(directives.includes('WorkingDirectory=/root/telebox'));
+  assert.ok(directives.includes('ExecStart=/usr/bin/node /root/mibot/dist/v2/index.js --serve'));
+  assert.ok(directives.includes('WorkingDirectory=/root/mibot'));
   for (const directive of [
     'Restart=on-failure', 'RestartSec=5s', 'KillSignal=SIGTERM',
     'KillMode=control-group', 'TimeoutStopSec=60s', 'SendSIGKILL=yes',
@@ -321,7 +321,7 @@ test('service template preserves direct startup, group cleanup, and journal logg
   }
   assert.equal(directives.filter((line) => line.startsWith('Exec')).length, 1);
   assert.match(service, /Install after foreground account verification/);
-  assert.match(service, /Description=Mi Box/);
+  assert.match(service, /Description=MiBot/);
   const readme = fs.readFileSync(path.join(PROJECT_ROOT, 'deploy/systemd/README.md'), 'utf8');
   assert.match(readme, /INSTALL\.md/);
   assert.match(readme, /runtime\.ready/);

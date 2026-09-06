@@ -15,8 +15,8 @@ test('public commands select the compiled V2 runtime and build chain', () => {
   }
 });
 test('deployment has one systemd entrypoint', () => {
-  const unit = fs.readFileSync(path.join(root, 'deploy/systemd/telebox-v2.service'), 'utf8');
-  assert.match(unit, /^ExecStart=\/usr\/bin\/node \/root\/telebox\/dist\/v2\/index.js --serve$/m);
+  const unit = fs.readFileSync(path.join(root, 'deploy/systemd/mibot.service'), 'utf8');
+  assert.match(unit, /^ExecStart=\/usr\/bin\/node \/root\/mibot\/dist\/v2\/index.js --serve$/m);
   for (const file of ['ecosystem.config.cjs', 'src/index.ts', 'scripts/deploy-v2-production.sh', 'scripts/restore-v2-production.sh']) {
     assert.equal(fs.existsSync(path.join(root, file)), false, file);
   }

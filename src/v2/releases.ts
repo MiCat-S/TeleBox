@@ -106,6 +106,35 @@ export class PluginReleases {
     }, signal));
   }
 
+  remove(id: string): Promise<void> {
+    if (!idPattern.test(id)) return Promise.reject(new ReleaseError("STATE"));
+    return this.scope.run("release:remove", signal => this.queue.submit(id, async () => {
+      const old = this.generations.get(id);
+      if (!old && this.host.pluginState(id)) throw new ReleaseError("CONFLICT");
+      if (old) {
+        this.host.assertCanUnload(id, this.stopTimeout, old.owner);
+        old.state = "draining";
+        const report = await this.host.unload(id, this.stopTimeout, old.owner);
+        if (report && !report.completed) throw new ReleaseError("STOP");
+      }
+      try {
+        await this.options.store.update(current => {
+          validate(current);
+          const plugins = {...current.plugins};
+          delete plugins[id];
+          return {...current, plugins};
+        }, signal);
+      } catch (error) {
+        if (old && !signal.aborted) {
+          await this.host.load(old.handle.create(), old.owner);
+          old.state = "active";
+        }
+        throw error;
+      }
+      if (old) {old.handle.release(); this.generations.delete(id);}
+    }, signal));
+  }
+
   shutdown(timeoutMs = 15000) {
     this.scope.assertCanDrain(timeoutMs);
     for (const [id, generation] of this.generations) this.host.assertCanUnload(id, timeoutMs, generation.owner);

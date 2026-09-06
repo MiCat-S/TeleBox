@@ -1,4 +1,4 @@
-# Mi Box V2 安装
+# MiBot V2 安装
 
 ## 环境
 
@@ -13,26 +13,28 @@ apt-get install -y git build-essential python3 pkg-config libcairo2-dev libpango
 
 ## 获取与构建
 
-两个仓库都使用 `main` 分支。插件目录名保留 `TeleBox-Plugins`，
+两个仓库都使用 `main` 分支。插件目录名保留 `mibot-plugins`，
 这是打包工具默认使用的同级路径。已有目录不得直接覆盖。
 
 ```sh
-git clone --branch main https://github.com/MiCat-S/Mi-Box.git /root/telebox
-git clone --branch main https://github.com/MiCat-S/Mi-Box-Plugins.git /root/TeleBox-Plugins
-cd /root/telebox
+git clone --branch main https://github.com/MiCat-S/Mi-Box.git /root/mibot
+git clone --branch main https://github.com/MiCat-S/Mi-Box-Plugins.git /root/mibot-plugins
+cd /root/mibot
 npm ci
 npm run package:v2
 npm run check:v2
 ```
 
 离线检查通过不代表 Telegram 登录或全部插件外部接口已验证。
+打包只包含默认模块所需的 `ai`、`gt`，其他扩展在 TG 通过
+`.tpm search` 和 `.tpm install 插件名` 安装，不随安装器自动启用。
 
 ## 登录与前台验证
 
 准备自己申请的 Telegram `api_id` 和 `api_hash`：
 
 ```sh
-cd /root/telebox
+cd /root/mibot
 umask 077
 npm run login
 ```
@@ -58,7 +60,7 @@ npm start
 开机自启和启动就绪检查：
 
 ```sh
-cd /root/telebox
+cd /root/mibot
 npm run service:install
 ```
 
@@ -70,19 +72,24 @@ npm run service:install
 
 ### 手动安装
 
-模板使用 `/root/telebox` 和 `/usr/bin/node`，以 root 运行。
+模板使用 `/root/mibot` 和 `/usr/bin/node`，以 root 运行。
 插件和 `.exec` 将拥有该账户权限，只安装可信代码。非 root 部署需要
 另行调整目录、所有权及 `.restart` 的服务管理授权，不能直接套用。
 
 ```sh
-cd /root/telebox
-systemd-analyze verify deploy/systemd/telebox-v2.service
-install -m 644 deploy/systemd/telebox-v2.service /etc/systemd/system/telebox-v2.service
+cd /root/mibot
+systemd-analyze verify deploy/systemd/mibot.service
+install -m 644 deploy/systemd/mibot.service /etc/systemd/system/mibot.service
 systemctl daemon-reload
-systemctl enable --now telebox-v2
-systemctl status telebox-v2 --no-pager
-journalctl -u telebox-v2 -n 50 --no-pager
+systemctl enable --now mibot
+systemctl status mibot --no-pager
+journalctl -u mibot -n 50 --no-pager
 ```
 
-服务名保留 `telebox-v2`，与 `.restart` 一致；直接执行 Node，不需要 PM2。
+服务名为 `mibot`，与 `.restart` 一致；直接执行 Node。
 升级、备份、回滚见 [运维说明](deploy/systemd/README.md)。
+
+已有 `/root/telebox` 和 `telebox-v2.service` 的部署不能直接套用新路径：
+先备份并停止旧服务，再迁移目录、插件及账号数据，安装 `mibot.service`。
+确认新服务正常后禁用旧服务，禁止两个实例同时运行。GitHub 仓库地址
+不受本地目录名影响，继续使用上面的 Mi-Box 和 Mi-Box-Plugins 地址。

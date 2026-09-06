@@ -1,13 +1,13 @@
-# Mi Box systemd 运维
+# MiBot systemd 运维
 
 初次安装见 [INSTALL.md](../../INSTALL.md)。
-模板对应 `/root/telebox`、`/usr/bin/node`（Node 24）、服务名 `telebox-v2`。
+模板对应 `/root/mibot`、`/usr/bin/node`（Node 24）、服务名 `mibot`。
 
 ```sh
-systemctl status telebox-v2 --no-pager
-systemctl restart telebox-v2
-systemctl stop telebox-v2
-journalctl -u telebox-v2 -f
+systemctl status mibot --no-pager
+systemctl restart mibot
+systemctl stop mibot
+journalctl -u mibot -f
 ```
 
 日志由 journald 管理，按机器容量配置保留策略。卸载 PM2 前确认它没有

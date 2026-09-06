@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const root = path.resolve(__dirname, '..');
-const plugins = path.resolve(root, '../TeleBox-Plugins');
+const preferred = path.resolve(root, '../mibot-plugins');
+const plugins = fs.existsSync(preferred) ? preferred : path.resolve(root, '../TeleBox-Plugins');
 
 function run(args) {
   const result = spawnSync(process.execPath, args, {cwd: root, stdio: 'inherit', shell: false});
@@ -14,7 +15,7 @@ function run(args) {
 
 const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
 run([tsc, '-p', 'tsconfig.v2.json']);
-run([tsc, '-p', '../TeleBox-Plugins/tsconfig.v2.json']);
+run([tsc, '-p', path.join(plugins, 'tsconfig.v2.json')]);
 run([path.join(__dirname, 'package-v2-daily.cjs')]);
 run([path.join(__dirname, 'build-v2.cjs'), '--test']);
 const tests = [];
@@ -32,6 +33,7 @@ tests.push(path.join(__dirname, 'build-v2-plugin.test.cjs'));
 tests.push(path.join(__dirname, 'server-v2-check.test.cjs'));
 tests.push(path.join(__dirname, 'login-v2.test.cjs'));
 tests.push(path.join(__dirname, 'install-service.test.cjs'));
+tests.push(path.join(__dirname, 'default-plugins.test.cjs'));
 tests.push(path.join(__dirname, 'v2-entrypoints.test.cjs'));
 const extensionTests = fs.readdirSync(path.join(plugins, 'scripts'), {withFileTypes: true})
   .filter(entry => entry.isFile() && /-v2(?:-[a-z0-9-]+)?\.test\.js$/.test(entry.name))

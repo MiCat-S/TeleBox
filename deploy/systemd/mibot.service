@@ -1,6 +1,6 @@
 # Install after foreground account verification; see INSTALL.md.
 [Unit]
-Description=Mi Box
+Description=MiBot
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=60
@@ -8,9 +8,9 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-WorkingDirectory=/root/telebox
+WorkingDirectory=/root/mibot
 # Operator must verify this absolute Node 24 binary path.
-ExecStart=/usr/bin/node /root/telebox/dist/v2/index.js --serve
+ExecStart=/usr/bin/node /root/mibot/dist/v2/index.js --serve
 Environment=NODE_ENV=production
 Restart=on-failure
 RestartSec=5s
@@ -20,7 +20,7 @@ TimeoutStopSec=60s
 SendSIGKILL=yes
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=telebox-v2
+SyslogIdentifier=mibot
 
 [Install]
 WantedBy=multi-user.target

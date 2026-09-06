@@ -5,6 +5,11 @@ import { HTMLParser } from "teleproto/extensions/html.js";
 import { ResourceScope } from "../lifecycle";
 import type { MessageEnvelope, MessageOptions, PluginContext } from "../sdk";
 import { createHelp } from "./help";
+import {PluginHost} from "../host";
+import {definePlugin} from "../sdk";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 type HelpHost = Parameters<typeof createHelp>[0];
 type PluginInfo = ReturnType<HelpHost["listPlugins"]>[number];
@@ -82,6 +87,39 @@ function validateMessages(messages: Sent[]): void {
 
 function visible(messages: Sent[]): string { return messages.map((entry) => HTMLParser.parse(entry.text)[0]).join("\n"); }
 
+test("live host installation update and unload immediately change help and details", async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mibot-help-")));
+  const output: string[] = [];
+  const host = new PluginHost({storageRoot: root, logger: {info() {}, error() {}},
+    telegram: {async edit(_message, text) {output.push(text);}, async reply(_message, text) {output.push(text);},
+      async invoke() {throw new Error("unexpected");}, async getReply() {return undefined;},
+      async withClient() {throw new Error("unexpected");}}});
+  t.after(async () => {await host.shutdown(1000); await fs.rm(root, {recursive: true, force: true});});
+  await host.load(createHelp(host));
+  const run = async (text = ".help") => {
+    output.length = 0;
+    await host.dispatchPrimary({id: 1, chatId: "1", senderId: "1", text, outgoing: true});
+    return output.map(page => HTMLParser.parse(page)[0]).join("\n");
+  };
+  assert.doesNotMatch(await run(), /扩展插件|\.custom/);
+  const extension = (name: string, description: string) => definePlugin({
+    apiVersion: 1, id: "new_extension", description,
+    commands: {[name]: {description, async handle() {}}},
+  });
+  await host.load(extension("custom", "第一版说明"));
+  assert.match(await run(), /3 个命令[\s\S]*扩展插件\n\.custom/);
+  assert.match(await run(".help custom"), /第一版说明/);
+  assert.equal((await host.unload("new_extension", 1000))?.completed, true);
+  await host.load(extension("custom2", "第二版说明"));
+  assert.match(await run(".help custom2"), /第二版说明/);
+  assert.match(await run(".help custom"), /未找到/);
+  await host.unload("new_extension", 1000);
+  const removed = await run();
+  assert.match(removed, /2 个命令/);
+  assert.doesNotMatch(removed, /扩展插件|custom2/);
+  assert.match(await run(".help custom2"), /未找到/);
+});
+
 test("help factory is side-effect-free and exports matching help/h handlers", async (t) => {
   const f = fixture(t, [plugin("ping")]);
   assert.equal(f.help.id, "help");
@@ -97,11 +135,11 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
   const f = fixture(t, [plugin("ping"), plugin("tools", ["one", "two"]), plugin("help", ["help", "h"])]);
   const messages = await f.run();
   const text = visible(messages);
-  assert.match(text, /Mi Box 控制台/);
+  assert.match(text, /MiBot 控制台/);
   assert.match(text, /5 个命令/);
   assert.match(text, /常用命令\n\.ping/);
   assert.match(text, /系统工具\n\.h  \.help/);
-  assert.match(text, /其他命令\n\.one  \.two/);
+  assert.match(text, /扩展插件\n\.one  \.two/);
   assert.match(text, /发送 \.help <命令> 查看详细说明/);
   assert.equal(text.includes(".tpm search"), false);
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/Mi-Box"')));

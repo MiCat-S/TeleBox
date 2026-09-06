@@ -17,14 +17,13 @@ import createStatus from "./builtins/status";
 import createEnv from "./builtins/env";
 import createSysinfo from "./builtins/sysinfo";
 import createVersion from "./builtins/version";
-import createRe from "./builtins/re";
 import createAgent from "./builtins/agent";
 import createExec from "./builtins/exec";
 import createRestart from "./builtins/restart";
 import createBf from "./builtins/bf";
-import createLeech from "./builtins/leech";
 import createSudo from "./builtins/sudo";
-import createSure from "./builtins/sure";
+import {PluginReleases, type ReleaseState} from "./releases";
+import {StorageRoot} from "./storage";
 import createTpm from "./builtins/tpm";
 import createUpdate from "./builtins/update";
 import createAutofix from "./builtins/autofix";
@@ -33,7 +32,7 @@ import {TeleprotoPort, subscribeMessages} from "./telegram";
 import {AccountError, assertLegacyStopped, lockAccount, readAccount, readEnvironment} from "./account";
 import {installProtocolCompatibility, type ProtocolCompatibility, type ProtocolLogDecision} from "./protocol-compat";
 
-export const DAILY_PLUGINS = Object.freeze(["ai", "da", "dc", "dme", "gt", "ids", "ip", "nodeseek", "rate", "sum", "yvlu", "aban", "dig", "pangu", "subinfo"] as const);
+export const DAILY_PLUGINS = Object.freeze(["ai", "gt"] as const);
 export interface RuntimeOptions {
   root?: string;
   pluginRoot?: string;
@@ -134,6 +133,8 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     requestRetries: 5, autoReconnect: true, timeout: 10,
   });
   let host: PluginHost | undefined;
+  let releases: PluginReleases | undefined;
+  const releaseStorage = new StorageRoot(path.join(root, "assets"));
   let detach: (() => Promise<void>) | undefined;
   const prepared: PreparedArtifact[] = [];
   let reason = "startup-failed";
@@ -160,19 +161,21 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     await host.load(createEnv());
     await host.load(createSysinfo());
     await host.load(createVersion(root));
-    await host.load(createRe());
     await host.load(createAgent());
     await host.load(createExec());
     const restart = createRestart(selfId, rootScope.signal);
     await host.load(restart);
     await host.load(createBf(root));
-    await host.load(createLeech());
     await host.load(createSudo());
-    await host.load(createSure());
-    await host.load(createTpm());
+    const selection = releaseStorage.json<ReleaseState>("tpm", "releases.json", {schemaVersion: 1, plugins: {}});
+    releases = new PluginReleases(host, {artifactRoot: path.join(root, "dist/v2-plugins"), store: selection});
+    await host.load(createTpm(host, releases, root, selfId));
     await host.load(createUpdate(root));
     await host.load(createAutofix(root));
     await loadDaily(host, pluginRoot, prepared);
+    for (const [id, selected] of Object.entries((await selection.read()).plugins)) {
+      await releases.activate(id, selected.current);
+    }
     detach = await subscribeMessages(client, events, async (message, signal) => {
       signal.throwIfAborted();
       try {
@@ -183,7 +186,8 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
         if (!signal.aborted) logger.error("runtime.message_failed", {kind: error instanceof Error ? error.name : "unknown"});
       }
     }, {selfId});
-    logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 21});
+    logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 18,
+      extensions: releases.snapshot().generations.length});
     const stopped = waitForStop(options.signals ?? ["SIGINT", "SIGTERM"], rootScope);
     await restart.notifyReady();
     reason = await stopped;
@@ -199,7 +203,9 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     let transportReport = transport.snapshot();
     let loggingReport = logging.snapshot();
     await attempt(async () => {eventReport = await events.drain(15000); requireComplete("events", eventReport);});
+    await attempt(async () => {if (releases) requireComplete("plugins", await releases.shutdown(30000));});
     await attempt(async () => {if (host) {hostReport = await host.shutdown(30000); requireComplete("host", hostReport);}});
+    await attempt(() => releaseStorage.close());
     if (hostReport.completed) for (const artifact of prepared.reverse()) await attempt(() => artifact.release());
     await attempt(async () => {transportReport = await transport.drain(15000); requireComplete("transport", transportReport);});
     await attempt(async () => {loggingReport = await logging.drain(15000); requireComplete("logging", loggingReport);});

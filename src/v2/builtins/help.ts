@@ -177,12 +177,11 @@ export function createHelp(host: HelpHost): PluginDefinition {
       const add = (html: string): void => { blocks.push(...format.normalize(html)); };
       const query = invocation.args.join(" ").trim();
       if (!query) {
-        add(`<b>Mi Box 控制台</b>  <code>${commands.length} 个命令</code>`);
+        add(`<b>MiBot 控制台</b>  <code>${commands.length} 个命令</code>`);
         add(`前缀 ${configuration.prefixes.map(code).join(" · ")}`);
         const groups: ReadonlyArray<[string, ReadonlySet<string>]> = [
           ["常用命令", new Set(["agent", "ai", "gt", "memory", "ping", "status", "sysinfo", "tpm", "update"])],
           ["系统工具", new Set(["alias", "autofix", "bf", "env", "exec", "help", "loglevel", "prefix", "restart", "sudo", "version"])],
-          ["扩展插件", new Set(["da", "dc", "dme", "ids", "ip", "leech", "nodeseek", "rate", "re", "sum", "sure", "yvlu"])],
         ];
         const listed = new Set<string>();
         const addCommands = (names: string[]): void => {
@@ -223,7 +222,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
           .sort((a, b) => a.name.localeCompare(b.name));
         if (!listed.size && !ungrouped.length) add("暂无可用命令");
         if (ungrouped.length) {
-          add("<b>其他命令</b>");
+          add("<b>扩展插件</b>");
           addCommands(ungrouped.map((entry) => entry.name));
         }
         const jobOnly = plugins.filter((plugin) => !plugin.commands.length);
@@ -235,7 +234,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
         if (commands.some((entry) => entry.name === "tpm")) {
           add(`${code(prefix + "tpm search")} 显示远程插件列表`);
         }
-        add(`<a href="https://github.com/MiCat-S/Mi-Box">Mi Box 仓库</a> | <a href="https://github.com/MiCat-S/Mi-Box-Plugins">插件仓库</a>`);
+        add(`<a href="https://github.com/MiCat-S/Mi-Box">MiBot 仓库</a> | <a href="https://github.com/MiCat-S/Mi-Box-Plugins">插件仓库</a>`);
         output = pages(blocks);
       } else {
         const target = resolve(query, plugins, configuration.prefixes, aliases);

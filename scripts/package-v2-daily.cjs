@@ -5,11 +5,12 @@ const path = require('node:path');
 const {build} = require('./build-v2.cjs');
 const {buildPlugin} = require('./build-v2-plugin.cjs');
 
-const DAILY_PLUGINS = Object.freeze(['ai', 'da', 'dc', 'dme', 'gt', 'ids', 'ip', 'nodeseek', 'rate', 'sum', 'yvlu', 'aban', 'dig', 'pangu', 'subinfo']);
+const DAILY_PLUGINS = Object.freeze(['ai', 'gt']);
 
 function packageDaily(options = {}) {
   const project = fs.realpathSync(options.project || path.resolve(__dirname, '..'));
-  const plugins = fs.realpathSync(options.plugins || path.resolve(project, '../TeleBox-Plugins'));
+  const preferred = path.resolve(project, '../mibot-plugins');
+  const plugins = fs.realpathSync(options.plugins || (fs.existsSync(preferred) ? preferred : path.resolve(project, '../TeleBox-Plugins')));
   build();
   const dist = path.join(project, 'dist');
   fs.mkdirSync(dist, {recursive: true});
