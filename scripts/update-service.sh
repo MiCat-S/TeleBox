@@ -1,8 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 umask 077
+
 root=${1:-/root/mibot}
-[[ "$root" == /root/mibot && -d "$root/.git" ]] || exit 2
+[[ -d "$root/.git" ]] || exit 2
+mkdir -p "$root/temp"
+mkdir -p /run/lock
 exec 9>/run/lock/mibot-update.lock
 /usr/bin/flock -n 9 || exit 3
 cd "$root"

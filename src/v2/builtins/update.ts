@@ -29,6 +29,18 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
     }
     return "请查看服务日志并检查权限与安装状态。";
   };
+  const readServiceLog = async (ctx: PluginContext): Promise<string> => {
+    try {
+      const logResult = await ctx.processes.run("/usr/bin/journalctl", ["-u", updateService, "-n", "80", "--no-pager"], {
+        timeoutMs: 4000,
+        maxOutputBytes: 4000,
+      });
+      const text = logResult.stdout.toString("utf8").trim();
+      return text ? `\n<pre>${text}</pre>` : "";
+    } catch {
+      return "";
+    }
+  };
   const reportFailure = async (ctx: PluginContext, receipt: Receipt, text: string): Promise<void> => {
     await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true}, text, {parseMode: "html"});
     await clear(ctx, receipt);
@@ -101,15 +113,18 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
-          await ctx.processes.run("/usr/bin/test", ["-f", "/etc/systemd/system/mibot-update.service"],
+          await ctx.processes.run("/usr/bin/systemctl", ["show", "--value", "-p", "LoadState", updateService],
             {timeoutMs: 3000, maxOutputBytes: 2000});
+          await ctx.processes.run("/usr/bin/systemctl", ["reset-failed", updateService], {timeoutMs: 5000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["daemon-reload"], {timeoutMs: 5000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", updateService],
             {timeoutMs: 5000, maxOutputBytes: 2000});
           submitted = true;
         } catch (error) {
           submitted = false;
-          await reportFailure(ctx, receipt, `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>`);
+          const logs = await readServiceLog(ctx);
+          await reportFailure(ctx, receipt,
+            `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>${logs}`);
           return;
         }
         watchResult(ctx, receipt);
