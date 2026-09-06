@@ -21,6 +21,7 @@ import createRe from "./builtins/re";
 import createAgent from "./builtins/agent";
 import createExec from "./builtins/exec";
 import createReload from "./builtins/reload";
+import createBf from "./builtins/bf";
 import {prepareArtifact, type PreparedArtifact} from "./artifacts";
 import {TeleprotoPort, subscribeMessages} from "./telegram";
 import {AccountError, assertLegacyStopped, lockAccount, readAccount, readEnvironment} from "./account";
@@ -148,6 +149,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     await host.load(createAgent());
     await host.load(createExec());
     await host.load(createReload());
+    await host.load(createBf(root));
     await loadDaily(host, pluginRoot, prepared);
     detach = await subscribeMessages(client, events, async (message, signal) => {
       signal.throwIfAborted();
@@ -159,7 +161,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
         if (!signal.aborted) logger.error("runtime.message_failed", {kind: error instanceof Error ? error.name : "unknown"});
       }
     }, {selfId});
-    logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 14});
+    logLine("info", "runtime.ready", {plugins: DAILY_PLUGINS.length, builtins: 15});
     reason = await waitForStop(options.signals ?? ["SIGINT", "SIGTERM"], rootScope);
   } catch (error) {
     failure = error;
