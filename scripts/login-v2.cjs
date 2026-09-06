@@ -24,10 +24,10 @@ async function login() {
   output.columns = process.stdout.columns;
   const rl = readline.createInterface({input: process.stdin, output, terminal: true});
   const ask = async (label, secret = false, trim = true) => {
-    process.stdout.write(label);
+    process.stdout.write(`${label}\n`);
     muted = secret;
-    try {const answer = await rl.question(''); return trim ? answer.trim() : answer;}
-    finally {muted = false; if (secret) process.stdout.write('\n');}
+    try {const answer = await rl.question('> '); return trim ? answer.trim() : answer;}
+    finally {muted = false; process.stdout.write('\n');}
   };
   let client, failure;
   let stage = 'credentials';
