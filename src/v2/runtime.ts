@@ -33,7 +33,7 @@ import {TeleprotoPort, subscribeMessages} from "./telegram";
 import {AccountError, assertLegacyStopped, lockAccount, readAccount, readEnvironment} from "./account";
 import {installProtocolCompatibility, type ProtocolCompatibility, type ProtocolLogDecision} from "./protocol-compat";
 
-export const DAILY_PLUGINS = Object.freeze(["ai", "da", "dc", "dme", "gt", "ids", "ip", "nodeseek", "rate", "sum", "yvlu", "aban"] as const);
+export const DAILY_PLUGINS = Object.freeze(["ai", "da", "dc", "dme", "gt", "ids", "ip", "nodeseek", "rate", "sum", "yvlu", "aban", "dig", "pangu", "subinfo"] as const);
 export interface RuntimeOptions {
   root?: string;
   pluginRoot?: string;

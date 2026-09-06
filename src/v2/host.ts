@@ -303,6 +303,8 @@ export class PluginHost {
       if (!plugin.ready) continue;
       for (const listener of plugin.definition.listeners ?? []) {
         if (message.edited && !listener.edited) continue;
+        if (listener.ignoreCommands && (message.text.trimStart().startsWith("/") ||
+            this.prefixes.some(prefix => message.text.trimStart().startsWith(prefix)))) continue;
         work.push(plugin.scope.run(`listener:${plugin.definition.id}`, () => this.executor.submit(message.chatId,
           () => listener.handle(snapshot, plugin.context), plugin.scope.signal)));
       }

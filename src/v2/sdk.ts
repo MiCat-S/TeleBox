@@ -84,6 +84,7 @@ export interface CommandDefinition {
 
 export interface MessageListener {
   readonly edited?: boolean;
+  readonly ignoreCommands?: boolean;
   handle(message: MessageEnvelope, context: PluginContext): void | Promise<void>;
 }
 

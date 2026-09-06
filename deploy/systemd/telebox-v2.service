@@ -1,7 +1,6 @@
-# SERVICE TEMPLATE ONLY. Do not install or enable until the README
-# migration, account-exclusivity, live-command and rollback gates pass.
+# Install after foreground account verification; see INSTALL.md.
 [Unit]
-Description=TeleBox v2
+Description=Mi Box
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=60

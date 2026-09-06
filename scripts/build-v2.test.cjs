@@ -320,9 +320,10 @@ test('service template preserves direct startup, group cleanup, and journal logg
     assert.ok(directives.includes(directive), directive);
   }
   assert.equal(directives.filter((line) => line.startsWith('Exec')).length, 1);
-  assert.match(service, /SERVICE TEMPLATE ONLY/);
-  assert.match(service, /rollback gates pass/);
+  assert.match(service, /Install after foreground account verification/);
+  assert.match(service, /Description=Mi Box/);
   const readme = fs.readFileSync(path.join(PROJECT_ROOT, 'deploy/systemd/README.md'), 'utf8');
-  assert.match(readme, /Do NOT install, enable, or start/);
-  assert.match(readme, /separate oneshot controller unit/);
+  assert.match(readme, /INSTALL\.md/);
+  assert.match(readme, /runtime\.ready/);
+  assert.match(readme, /回滚/);
 });

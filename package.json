@@ -3,11 +3,12 @@
   "version": "0.2.9",
   "description": "",
   "scripts": {
-    "start": "node scripts/run-tsx.cjs ./src/index.ts",
-    "tpm": "node scripts/run-tsx.cjs ./src/plugin/tpm.ts",
-    "dev": "NODE_ENV=development node scripts/run-tsx.cjs ./src/index.ts",
-    "leech:smoke": "node scripts/run-tsx.cjs ./scripts/leech-smoke.ts",
-    "precompile": "node scripts/precompile-plugins.cjs",
+    "start": "node dist/v2/index.js --serve",
+    "login": "node scripts/login-v2.cjs",
+    "dev": "node scripts/package-v2-daily.cjs && node dist/v2/index.js --serve",
+    "build": "node scripts/package-v2-daily.cjs",
+    "test": "node scripts/test-v2.cjs",
+    "check": "node dist/v2/index.js --check",
     "build:v2": "node scripts/build-v2.cjs",
     "package:v2": "node scripts/package-v2-daily.cjs",
     "test:v2": "node scripts/test-v2.cjs",
@@ -16,7 +17,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TeleBoxOrg/TeleBox.git"
+    "url": "git+https://github.com/MiCat-S/Mi-Box.git"
   },
   "keywords": [],
   "author": "",
@@ -29,9 +30,9 @@
     }
   },
   "bugs": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox/issues"
+    "url": "https://github.com/MiCat-S/Mi-Box/issues"
   },
-  "homepage": "https://github.com/TeleBoxOrg/TeleBox#readme",
+  "homepage": "https://github.com/MiCat-S/Mi-Box#readme",
   "engines": {
     "node": "24.x"
   },
