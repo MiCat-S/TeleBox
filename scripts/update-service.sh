@@ -22,6 +22,7 @@ after=$(/usr/bin/git rev-parse HEAD)
 if [[ "$before" != "$after" || ! -d node_modules ]]; then
   /usr/bin/npm ci
 fi
+/usr/bin/npm run build:v2
 /usr/bin/npm run package:v2
 /usr/bin/npm run check:v2
 write_result success
