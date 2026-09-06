@@ -7,6 +7,7 @@ exec 9>/run/lock/mibot-update.lock
 /usr/bin/flock -n 9 || exit 3
 cd "$root"
 result_file="$root/temp/update-result.json"
+rm -f "$result_file"
 write_result() {
   local status="$1"
   local temp="${result_file}.$$"

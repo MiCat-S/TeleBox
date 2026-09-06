@@ -1,0 +1,12 @@
+[Unit]
+Description=MiBot update task
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/mibot
+ExecStart=/usr/bin/bash /root/mibot/scripts/update-service.sh /root/mibot
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mibot-update

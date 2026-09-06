@@ -57,6 +57,7 @@ NODE
 unit=/etc/systemd/system/mibot.service
 [[ ! -L "$unit" ]] || { echo "Refusing a symlink service unit" >&2; exit 1; }
 /usr/bin/systemd-analyze verify deploy/systemd/mibot.service
+/usr/bin/systemd-analyze verify deploy/systemd/mibot-update.service
 backup=$(mktemp -d /root/mibot-install.XXXXXX)
 printf 'Backup: %s\n' "$backup"
 for entry in dist/v2 dist/v2-plugins-active; do
@@ -91,6 +92,7 @@ printf '%s\n' 'Building MiBot and plugins...'
 /usr/bin/node scripts/package-v2-daily.cjs > "$backup/build.log" 2>&1
 /usr/bin/node dist/v2/index.js --check > "$backup/check.log" 2>&1
 install -m 644 deploy/systemd/mibot.service "$unit"
+install -m 644 deploy/systemd/mibot-update.service /etc/systemd/system/mibot-update.service
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl reset-failed mibot || true
 /usr/bin/systemctl enable --now mibot

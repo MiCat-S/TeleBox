@@ -74,9 +74,7 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
-          const unit = `mibot-update-${receipt.requestedAt}`;
-          await ctx.processes.run("/usr/bin/systemd-run", ["--quiet", "--collect", `--unit=${unit}`,
-            "--service-type=oneshot", "/usr/bin/bash", path.join(root, "scripts/update-service.sh"), root],
+          await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", "mibot-update.service"],
             {timeoutMs: 5000, maxOutputBytes: 2000});
           submitted = true;
         } catch (error) {

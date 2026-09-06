@@ -1,12 +1,12 @@
 # MiBot systemd 运维
 
 初次安装见 [INSTALL.md](../../INSTALL.md)。
-更新由独立的 `mibot-update-*` 临时任务执行，避免更新任务随着
+更新由独立的 `mibot-update.service` 临时任务执行，避免更新任务随着
 主服务重启而被终止。查看更新结果：
 
 ```sh
-systemctl status mibot-update --no-pager
-journalctl -u mibot-update -n 100 --no-pager
+systemctl status mibot-update.service --no-pager
+journalctl -u mibot-update.service -n 100 --no-pager
 ```
 模板对应 `/root/mibot`、`/usr/bin/node`（Node 24）、服务名 `mibot`。
 
