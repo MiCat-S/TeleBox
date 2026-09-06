@@ -42,7 +42,7 @@ function fixture() {
 }
 
 test("import is inert and does not load the old runtime or Teleproto", () => {
-  const result = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(require.resolve("./protocol-compat"))}); console.log(Object.keys(require.cache).filter(p => /teleproto|runtimeManager|channelGapBreaker|utils[/\\\\]logger/.test(p)))`], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(require.resolve("../../dist/v2/protocol-compat.js"))}); console.log(Object.keys(require.cache).filter(p => /teleproto|runtimeManager|channelGapBreaker|utils[/\\\\]logger/.test(p)))`], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), "[]");
 });
