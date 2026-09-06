@@ -77,3 +77,20 @@ test("missing sender identity cannot restart even on outgoing messages", async t
   await createRestart("123").commands.restart.handle({...f.inv, message: {...f.inv.message, senderId: undefined}}, f.ctx);
   assert.equal(f.calls.length, 0);
 });
+test("runtime shutdown suppresses process failure while plugin scope is still active", async t => {
+  const f = fixture(); t.after(f.restore);
+  const shutdown = new AbortController();
+  f.ctx.processes.run = async () => {
+    shutdown.abort();
+    throw new Error("helper terminated during service shutdown");
+  };
+  await createRestart("123", shutdown.signal).commands.restart.handle(f.inv, f.ctx);
+  assert.equal(f.ctx.signal.aborted, false);
+  assert.equal(f.edits.length, 1);
+  assert.doesNotMatch(f.edits.join(""), /失败/);
+});
+test("process failure remains visible when runtime shutdown has not started", async t => {
+  const f = fixture({fail: true}); t.after(f.restore);
+  await createRestart("123", new AbortController().signal).commands.restart.handle(f.inv, f.ctx);
+  assert.equal(f.edits.at(-1), "服务重启命令执行失败");
+});
