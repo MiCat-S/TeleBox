@@ -100,21 +100,40 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
   assert.match(text, /TeleBox 控制台/);
   assert.match(text, /5 个命令/);
   assert.match(text, /常用命令\n\.ping/);
-  assert.match(text, /功能模块/);
-  assert.match(text, /模块 tools\n\.one\n\.two/);
+  assert.match(text, /系统工具\n\.h  \.help/);
+  assert.match(text, /其他命令\n\.one  \.two/);
   assert.match(text, /发送 \.help <命令> 查看详细说明/);
   assert.equal(text.includes(".tpm search"), false);
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox"')));
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox-Plugins"')));
-  assert.equal(messages[1].kind, "reply");
+  assert.equal(messages.length, 1);
   for (const entry of messages) assert.equal(entry.message, f.message);
 });
 
-test("fallback basic commands remain populated when every plugin has multiple commands", async (t) => {
+test("production-sized rich-text catalog fits one compact message", async (t) => {
+  const ids = "agent ai alias autofix bf da dc dme env exec gt ids ip leech loglevel memory nodeseek ping prefix rate re restart status sudo sum sure sysinfo tpm update yvlu".split(" ");
+  const entries = [...ids.map((id) => plugin(id)), plugin("help", ["h", "help"]), plugin("version", ["ver", "version"])];
+  const f = fixture(t, entries);
+  f.setConfiguration({ prefixes: [".", "。", "$"], aliases: {} });
+  const messages = await f.run();
+  const text = visible(messages);
+  assert.equal(messages.length, 1, "the complete catalog edits only the invoking message");
+  assert.match(text, /34 个命令/);
+  assert.ok(text.split("\n").length <= 19, text);
+  assert.ok(text.length < 650, text);
+  assert.ok(messages[0].text.includes("<b>常用命令</b>"));
+  assert.ok(messages[0].text.includes("<code>.agent</code>  <code>.ai</code>"));
+  const listed = [...messages[0].text.matchAll(/<code>(\.[a-z]+)<\/code>/g)].map((match) => match[1]);
+  assert.deepEqual(listed.sort(), entries.flatMap((entry) => entry.commands.map((command) => "." + command.name)).sort());
+  assert.equal(text.includes("功能模块"), false);
+  assert.equal(text.includes("快捷模块"), false);
+});
+
+test("commands remain populated when every plugin has multiple commands", async (t) => {
   const f = fixture(t, [plugin("tools", ["one", "two"])]);
   const messages = await f.run();
-  assert.match(visible(messages), /\.one\n\.two/);
-  assert.equal(visible(messages).includes("暂无基础命令"), false);
+  assert.match(visible(messages), /\.one  \.two/);
+  assert.equal(visible(messages).includes("暂无可用命令"), false);
 });
 
 test("empty command catalogs and job-only modules have usable main and detail help", async (t) => {
@@ -123,7 +142,7 @@ test("empty command catalogs and job-only modules have usable main and detail he
   const jobs = plugin("timer", [], "定时模块说明");
   jobs.jobs = [{ name: "daily", cron: "0 0 * * *", description: "每天运行" }];
   f.setPlugins([jobs]);
-  assert.match(visible(await f.run()), /模块 timer\n无可调用命令/);
+  assert.match(visible(await f.run()), /定时模块\ntimer/);
   const detail = visible(await f.run(["timer"]));
   assert.match(detail, /定时模块说明/);
   assert.match(detail, /定时任务\ndaily \(0 0 \* \* \*\)\n每天运行/);
@@ -244,7 +263,7 @@ test("hundreds of single entries paginate without dropping commands or exceeding
   assert.equal(text.includes("纯文本"), false);
 });
 
-test("hundreds of module commands and aliases preserve all groups across replies", async (t) => {
+test("hundreds of module commands and aliases preserve all commands across replies", async (t) => {
   const entries = [plugin("single"), ...Array.from({ length: 120 }, (_, index) => plugin(`module${index}`, [`a${index}`, `b${index}`]))];
   const f = fixture(t, entries);
   f.setConfiguration({ prefixes: ["!"], aliases: Object.fromEntries(Array.from({ length: 120 }, (_, index) => [`alias${index}`, `a${index}`])) });
@@ -252,7 +271,6 @@ test("hundreds of module commands and aliases preserve all groups across replies
   const text = visible(messages);
   assert.ok(messages.length > 3);
   for (let index = 0; index < 120; index += 1) {
-    assert.ok(text.includes(`模块 module${index}\n`));
     assert.ok(text.includes(`!a${index}（别名：!alias${index}）`));
     assert.ok(text.includes(`!b${index}`));
   }

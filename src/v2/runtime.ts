@@ -20,7 +20,7 @@ import createVersion from "./builtins/version";
 import createRe from "./builtins/re";
 import createAgent from "./builtins/agent";
 import createExec from "./builtins/exec";
-import createReload from "./builtins/reload";
+import createRestart from "./builtins/restart";
 import createBf from "./builtins/bf";
 import createLeech from "./builtins/leech";
 import createSudo from "./builtins/sudo";
@@ -163,7 +163,7 @@ export async function serve(options: RuntimeOptions = {}): Promise<RuntimeResult
     await host.load(createRe());
     await host.load(createAgent());
     await host.load(createExec());
-    await host.load(createReload());
+    await host.load(createRestart());
     await host.load(createBf(root));
     await host.load(createLeech());
     await host.load(createSudo());

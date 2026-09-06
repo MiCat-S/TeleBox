@@ -181,36 +181,55 @@ export function createHelp(host: HelpHost): PluginDefinition {
         add(`前缀 ${configuration.prefixes.map(code).join(" · ")}`);
         const groups: ReadonlyArray<[string, ReadonlySet<string>]> = [
           ["常用命令", new Set(["agent", "ai", "gt", "memory", "ping", "status", "sysinfo", "tpm", "update"])],
-          ["系统工具", new Set(["alias", "autofix", "bf", "env", "exec", "loglevel", "prefix", "reload", "sudo", "version"])],
+          ["系统工具", new Set(["alias", "autofix", "bf", "env", "exec", "help", "loglevel", "prefix", "restart", "sudo", "version"])],
           ["扩展插件", new Set(["da", "dc", "dme", "ids", "ip", "leech", "nodeseek", "rate", "re", "sum", "sure", "yvlu"])],
         ];
-        const singles = plugins.filter((plugin) => plugin.commands.length === 1);
-        const fallback = singles.length ? singles.flatMap((plugin) => plugin.commands) : commands;
         const listed = new Set<string>();
+        const addCommands = (names: string[]): void => {
+          let row: string[] = [];
+          let width = 0;
+          const flush = (): void => {
+            if (row.length) add(row.join("  "));
+            row = [];
+            width = 0;
+          };
+          for (const name of [...new Set(names)].sort()) {
+            if (listed.has(name)) continue;
+            listed.add(name);
+            const line = commandLine(name, prefix, aliases);
+            const length = prefix.length + name.length;
+            if (aliasesFor(name, aliases).length) {
+              flush();
+              add(line);
+              continue;
+            }
+            if (row.length >= 4 || width + length + 2 > 36) flush();
+            row.push(line);
+            width += length + 2;
+          }
+          flush();
+        };
         for (const [title, ids] of groups) {
-          const entries = singles
+          const entries = plugins
             .filter((plugin) => ids.has(plugin.id.toLowerCase()))
             .flatMap((plugin) => plugin.commands)
             .sort((a, b) => a.name.localeCompare(b.name));
           if (!entries.length) continue;
           add(`<b>${title}</b>`);
-          for (const entry of entries) {
-            if (!listed.has(entry.name)) {
-              listed.add(entry.name);
-              add(commandLine(entry.name, prefix, aliases));
-            }
-          }
+          addCommands(entries.map((entry) => entry.name));
         }
-        const ungrouped = fallback
+        const ungrouped = commands
           .filter((entry) => !listed.has(entry.name))
           .sort((a, b) => a.name.localeCompare(b.name));
         if (!listed.size && !ungrouped.length) add("暂无可用命令");
         if (ungrouped.length) {
           add("<b>其他命令</b>");
-          for (const entry of ungrouped) {
-            listed.add(entry.name);
-            add(commandLine(entry.name, prefix, aliases));
-          }
+          addCommands(ungrouped.map((entry) => entry.name));
+        }
+        const jobOnly = plugins.filter((plugin) => !plugin.commands.length);
+        if (jobOnly.length) {
+          add("<b>定时模块</b>");
+          for (const plugin of jobOnly) add(code(plugin.id));
         }
         add(`发送 ${code(prefix + "help <命令>")} 查看详细说明`);
         if (commands.some((entry) => entry.name === "tpm")) {
@@ -218,20 +237,6 @@ export function createHelp(host: HelpHost): PluginDefinition {
         }
         add(`<a href="https://github.com/MiCat-S/TeleBox">TeleBox 仓库</a> | <a href="https://github.com/MiCat-S/TeleBox-Plugins">插件仓库</a>`);
         output = pages(blocks);
-        const modules: Block[] = [];
-        for (const plugin of [...plugins].filter((entry) => entry.commands.length !== 1).sort((a, b) => a.id.localeCompare(b.id))) {
-          modules.push(...format.normalize(`<b>${pluginIcons[plugin.id.toLowerCase()] ?? "🧩"} 模块 ${escape(plugin.id)}</b>`));
-          if (!plugin.commands.length) modules.push(...format.normalize("无可调用命令"));
-          for (const entry of [...plugin.commands].sort((a, b) => a.name.localeCompare(b.name))) {
-            modules.push(...format.normalize(commandLine(entry.name, prefix, aliases)));
-          }
-        }
-        if (modules.length) {
-          output.push(...pages([
-            ...format.normalize("<b>功能模块</b>"), ...modules,
-            ...format.normalize(`使用 ${code(prefix + "help [模块名]")} 查看模块详情`),
-          ]));
-        }
       } else {
         const target = resolve(query, plugins, configuration.prefixes, aliases);
         if (!target) {
