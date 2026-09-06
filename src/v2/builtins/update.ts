@@ -4,6 +4,7 @@ import {readFile, unlink} from "node:fs/promises";
 import {setTimeout as delay} from "node:timers/promises";
 import path from "node:path";
 import {isOwner} from "../permissions";
+import type {ProcessError} from "../processes";
 
 type Receipt = {ownerId: string; chatId: string; messageId: number; requestedAt: number; bootId: string};
 type UpdateState = {pending: Receipt | null};
@@ -12,11 +13,22 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const bootId = randomUUID();
   let context: PluginContext | undefined;
   let submitted = false;
+  const updateService = "mibot-update.service";
   const store = (ctx: PluginContext) => ctx.storage.json<UpdateState>("update-receipt.json", {pending: null});
   const resultFile = path.join(root, "temp", "update-result.json");
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
+  const summarizeProcessError = (error: unknown): string => {
+    if (error instanceof Error && (error as ProcessError).code) {
+      const processError = error as ProcessError;
+      const output = Buffer.concat([processError.stdout || Buffer.alloc(0), processError.stderr || Buffer.alloc(0)])
+        .toString("utf8").trim();
+      const tail = output ? `\n${output.slice(0, 1200)}` : "";
+      return `${processError.message}${tail ? `\n${tail}` : ""}`;
+    }
+    return "请查看服务日志并检查权限与安装状态。";
+  };
   const reportFailure = async (ctx: PluginContext, receipt: Receipt, text: string): Promise<void> => {
     await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true}, text, {parseMode: "html"});
     await clear(ctx, receipt);
@@ -24,6 +36,7 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
   };
   const watchResult = (ctx: PluginContext, receipt: Receipt): void => {
     void ctx.tasks.run("update:result", async signal => {
+      let pending = true;
       for (let attempt = 0; attempt < 300; attempt += 1) {
         signal.throwIfAborted();
         try {
@@ -32,8 +45,16 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
             await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n更新任务未完成，服务保持当前版本。请稍后重试或查看服务器日志。");
             return;
           }
+          if (result.status === "success") { pending = false; await ctx.telegram.edit({id: receipt.messageId, chatId: receipt.chatId, text: "", outgoing: true},
+            "<b>MiBot 更新提交成功</b>\n更新服务已接收任务，服务重建中，请稍候执行 <code>.update</code> 查看结果。", {parseMode: "html"});
+            return; }
         } catch {}
         await delay(1000, undefined, {signal});
+      }
+      if (pending && !signal.aborted) {
+        pending = false;
+        await reportFailure(ctx, receipt,
+          "<b>MiBot 更新失败</b>\n更新任务已提交但未返回结果，请稍候查看日志：\n<code>systemctl status mibot-update.service --no-pager</code>\n<code>journalctl -u mibot-update.service -n 80 --no-pager</code>\n任务可在稍后执行 <code>.update</code> 重试检查。");
       }
     });
   };
@@ -71,17 +92,24 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         }
         const receipt: Receipt = {ownerId: ownerId ?? "", chatId: invocation.message.chatId,
           messageId: invocation.message.id, requestedAt: Date.now(), bootId};
+        const {pending} = await store(ctx).read();
+        if (pending) {
+          await ctx.telegram.edit(invocation.message,
+            "<b>MiBot 更新</b>\n已有更新任务进行中，请稍后查看结果或稍后重试。");
+          return;
+        }
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
           await ctx.processes.run("/usr/bin/test", ["-f", "/etc/systemd/system/mibot-update.service"],
             {timeoutMs: 3000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["daemon-reload"], {timeoutMs: 5000, maxOutputBytes: 2000});
-          await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", "mibot-update.service"],
+          await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", updateService],
             {timeoutMs: 5000, maxOutputBytes: 2000});
           submitted = true;
         } catch (error) {
-          await reportFailure(ctx, receipt, "<b>MiBot 更新失败</b>\n无法启动更新任务，请先确认 /etc/systemd/system/mibot-update.service 存在。\n执行：<code>systemctl status mibot-update.service --no-pager</code>\n并贴日志继续排障。");
+          submitted = false;
+          await reportFailure(ctx, receipt, `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>`);
           return;
         }
         watchResult(ctx, receipt);
@@ -105,15 +133,33 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
       }
       let status: "success" | "failed" | undefined;
       try {
-        const result = JSON.parse(await readFile(resultFile, "utf8")) as {status?: unknown};
-        if (result.status === "success" || result.status === "failed") status = result.status;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          try {
+            const result = JSON.parse(await readFile(resultFile, "utf8")) as {status?: unknown};
+            if (result.status === "success" || result.status === "failed") {
+              status = result.status;
+              break;
+            }
+          } catch {}
+          await delay(1000);
+        }
       } catch {}
-      if (!status) return;
-      await ctx.telegram.edit({id: pending.messageId, chatId: pending.chatId, text: "", outgoing: true},
-        status === "success" ? "<b>MiBot 更新成功</b>\n代码、依赖和插件已更新，服务已重新上线。"
-          : "<b>MiBot 更新失败</b>\n服务保持当前版本，请查看 <code>.update check</code> 或服务器日志。", {parseMode: "html"});
-      await clear(ctx, pending);
-      try { await unlink(resultFile); } catch {}
+      if (!status) {
+        if (age > 1 * 60_000) {
+          await ctx.telegram.edit({id: pending.messageId, chatId: pending.chatId, text: "", outgoing: true},
+            "<b>MiBot 更新</b>\n更新服务已启动但未产生日志结果，请检查：\n<code>systemctl status mibot-update.service --no-pager</code>\n<code>journalctl -u mibot-update.service -n 80 --no-pager</code>\n稍后可重试 <code>.update</code>。", {parseMode: "html"});
+          await clear(ctx, pending);
+          try { await unlink(resultFile); } catch {}
+        }
+        return;
+      }
+      if (status === "success" || status === "failed") {
+        await ctx.telegram.edit({id: pending.messageId, chatId: pending.chatId, text: "", outgoing: true},
+          status === "success" ? "<b>MiBot 更新成功</b>\n代码、依赖和插件已更新，服务已重新上线。"
+            : "<b>MiBot 更新失败</b>\n服务保持当前版本，请查看 <code>.update check</code> 或服务器日志。", {parseMode: "html"});
+        await clear(ctx, pending);
+        try { await unlink(resultFile); } catch {}
+      }
     } catch {
       if (!ctx.signal.aborted) ctx.log.error("update.receipt_failed");
     }
