@@ -97,7 +97,7 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
   const f = fixture(t, [plugin("ping"), plugin("tools", ["one", "two"]), plugin("help", ["help", "h"])]);
   const messages = await f.run();
   const text = visible(messages);
-  assert.match(text, /TeleBox 控制台/);
+  assert.match(text, /Mi Box 控制台/);
   assert.match(text, /5 个命令/);
   assert.match(text, /常用命令\n\.ping/);
   assert.match(text, /系统工具\n\.h  \.help/);

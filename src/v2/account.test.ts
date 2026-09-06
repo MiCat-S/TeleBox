@@ -22,6 +22,10 @@ test("invalid account inputs fail with fixed diagnostics", () => {
   }
 });
 
+test("default app name is Mi Box while explicit names remain unchanged", () => {
+  assert.equal(parseAccount({api_id: 123, api_hash: "private", session: "existing"}).deviceModel, "Mi Box");
+});
+
 test("reading configuration and dotenv does not rewrite private data", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "v2-account-"));
   try {

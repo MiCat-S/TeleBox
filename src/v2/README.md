@@ -1,4 +1,4 @@
-# TeleBox V2 Runtime
+# Mi Box V2 Runtime
 
 ## Delivery Status
 

@@ -37,7 +37,7 @@ export function parseAccount(value: unknown): AccountConfig {
       username: input.username as string | undefined, password: input.password as string | undefined, timeout: 10};
   }
   return {apiId: Number(record.api_id), apiHash: record.api_hash, session: record.session,
-    deviceModel: typeof record.app_name === "string" && record.app_name.trim() ? record.app_name : "TeleBox V2", proxy};
+    deviceModel: typeof record.app_name === "string" && record.app_name.trim() ? record.app_name : "Mi Box", proxy};
 }
 
 function isCode(error: unknown, code: string): boolean {

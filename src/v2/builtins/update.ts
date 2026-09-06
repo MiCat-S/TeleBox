@@ -3,7 +3,7 @@ import {readFile} from "node:fs/promises";
 import path from "node:path";
 
 export default function createUpdate(root = process.cwd()) {
-  return definePlugin({apiVersion: 1, id: "update", description: "查看 TeleBox 更新状态",
+  return definePlugin({apiVersion: 1, id: "update", description: "查看 Mi Box 更新状态",
     commands: {update: {description: "查看版本与自动更新状态", async handle(invocation, ctx) {
       const sub = invocation.args[0]?.toLowerCase() ?? "ver";
       if (sub === "ver" || sub === "version") {

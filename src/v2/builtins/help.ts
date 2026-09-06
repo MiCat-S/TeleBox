@@ -177,7 +177,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
       const add = (html: string): void => { blocks.push(...format.normalize(html)); };
       const query = invocation.args.join(" ").trim();
       if (!query) {
-        add(`<b>TeleBox 控制台</b>  <code>${commands.length} 个命令</code>`);
+        add(`<b>Mi Box 控制台</b>  <code>${commands.length} 个命令</code>`);
         add(`前缀 ${configuration.prefixes.map(code).join(" · ")}`);
         const groups: ReadonlyArray<[string, ReadonlySet<string>]> = [
           ["常用命令", new Set(["agent", "ai", "gt", "memory", "ping", "status", "sysinfo", "tpm", "update"])],
@@ -235,7 +235,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
         if (commands.some((entry) => entry.name === "tpm")) {
           add(`${code(prefix + "tpm search")} 显示远程插件列表`);
         }
-        add(`<a href="https://github.com/MiCat-S/TeleBox">TeleBox 仓库</a> | <a href="https://github.com/MiCat-S/TeleBox-Plugins">插件仓库</a>`);
+        add(`<a href="https://github.com/MiCat-S/TeleBox">Mi Box 仓库</a> | <a href="https://github.com/MiCat-S/TeleBox-Plugins">插件仓库</a>`);
         output = pages(blocks);
       } else {
         const target = resolve(query, plugins, configuration.prefixes, aliases);

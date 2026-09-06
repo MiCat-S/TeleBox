@@ -54,6 +54,7 @@ test("owner submits a fixed nonblocking systemd service restart", async t => {
   await createRestart("123").commands.restart.handle(f.inv, f.ctx);
   assert.deepEqual(f.calls, [["/usr/bin/systemctl", ["--no-block", "restart", "telebox-v2.service"],
     {timeoutMs: 5000, maxOutputBytes: 2000}]]);
+  assert.match(f.edits[0], /Mi Box 重启/);
   assert.match(f.edits[0], /正在提交重启请求/);
 });
 test("non-owner cannot restart the service", async t => {
@@ -122,7 +123,7 @@ test("new runtime edits the original message once after readiness", async t => {
   const targets: unknown[] = [];
   f.ctx.telegram.edit = async (message, text) => {targets.push(message); f.edits.push(text);};
   await next.notifyReady();
-  assert.match(f.edits.at(-1)!, /重启成功/);
+  assert.match(f.edits.at(-1)!, /Mi Box 重启成功/);
   assert.deepEqual(targets, [{id: 1, chatId: "123", text: "", outgoing: true}]);
   assert.equal(f.state().pending, null);
   await next.notifyReady();
