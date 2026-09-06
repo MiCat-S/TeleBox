@@ -99,10 +99,10 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
   const text = visible(messages);
   assert.match(text, /TeleBox 控制台/);
   assert.match(text, /5 个命令/);
-  assert.match(text, /基础命令\n\.ping/);
+  assert.match(text, /常用命令\n\.ping/);
   assert.match(text, /功能模块/);
   assert.match(text, /模块 tools\n\.one\n\.two/);
-  assert.match(text, /\.help \[命令或模块名\]/);
+  assert.match(text, /发送 \.help <命令> 查看详细说明/);
   assert.equal(text.includes(".tpm search"), false);
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox"')));
   assert.ok(messages.some((entry) => entry.text.includes('href="https://github.com/MiCat-S/TeleBox-Plugins"')));
@@ -113,13 +113,13 @@ test("main help shows single commands, grouped modules, dynamic prefixes and rep
 test("fallback basic commands remain populated when every plugin has multiple commands", async (t) => {
   const f = fixture(t, [plugin("tools", ["one", "two"])]);
   const messages = await f.run();
-  assert.match(HTMLParser.parse(messages[0].text)[0], /\.one\n\.two/);
+  assert.match(visible(messages), /\.one\n\.two/);
   assert.equal(visible(messages).includes("暂无基础命令"), false);
 });
 
 test("empty command catalogs and job-only modules have usable main and detail help", async (t) => {
   const f = fixture(t);
-  assert.match(visible(await f.run()), /0 个命令[\s\S]*暂无基础命令/);
+  assert.match(visible(await f.run()), /0 个命令[\s\S]*暂无可用命令/);
   const jobs = plugin("timer", [], "定时模块说明");
   jobs.jobs = [{ name: "daily", cron: "0 0 * * *", description: "每天运行" }];
   f.setPlugins([jobs]);

@@ -178,13 +178,41 @@ export function createHelp(host: HelpHost): PluginDefinition {
       const query = invocation.args.join(" ").trim();
       if (!query) {
         add(`<b>TeleBox 控制台</b>  <code>${commands.length} 个命令</code>`);
-        add(`前缀 ${configuration.prefixes.map(code).join(" · ")}　·　发送 ${code(prefix + "help 模块")} 查看详情`);
-        add(`<b>基础命令</b>`);
-        const singles = plugins.filter((plugin) => plugin.commands.length === 1).flatMap((plugin) => plugin.commands.map((entry) => entry.name));
-        const basic = singles.length ? singles : commands.map((entry) => entry.name);
-        if (!basic.length) add("暂无基础命令");
-        for (const name of [...new Set(basic)].sort()) add(commandLine(name, prefix, aliases));
-        add(`使用 ${code(prefix + "help [命令或模块名]")} 查看详情`);
+        add(`前缀 ${configuration.prefixes.map(code).join(" · ")}`);
+        const groups: ReadonlyArray<[string, ReadonlySet<string>]> = [
+          ["常用命令", new Set(["agent", "ai", "gt", "memory", "ping", "status", "sysinfo", "tpm", "update"])],
+          ["系统工具", new Set(["alias", "autofix", "bf", "env", "exec", "loglevel", "prefix", "reload", "sudo", "version"])],
+          ["扩展插件", new Set(["da", "dc", "dme", "ids", "ip", "leech", "nodeseek", "rate", "re", "sum", "sure", "yvlu"])],
+        ];
+        const singles = plugins.filter((plugin) => plugin.commands.length === 1);
+        const fallback = singles.length ? singles.flatMap((plugin) => plugin.commands) : commands;
+        const listed = new Set<string>();
+        for (const [title, ids] of groups) {
+          const entries = singles
+            .filter((plugin) => ids.has(plugin.id.toLowerCase()))
+            .flatMap((plugin) => plugin.commands)
+            .sort((a, b) => a.name.localeCompare(b.name));
+          if (!entries.length) continue;
+          add(`<b>${title}</b>`);
+          for (const entry of entries) {
+            if (!listed.has(entry.name)) {
+              listed.add(entry.name);
+              add(commandLine(entry.name, prefix, aliases));
+            }
+          }
+        }
+        const ungrouped = fallback
+          .filter((entry) => !listed.has(entry.name))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (!listed.size && !ungrouped.length) add("暂无可用命令");
+        if (ungrouped.length) {
+          add("<b>其他命令</b>");
+          for (const entry of ungrouped) {
+            listed.add(entry.name);
+            add(commandLine(entry.name, prefix, aliases));
+          }
+        }
+        add(`发送 ${code(prefix + "help <命令>")} 查看详细说明`);
         if (commands.some((entry) => entry.name === "tpm")) {
           add(`${code(prefix + "tpm search")} 显示远程插件列表`);
         }
@@ -202,20 +230,6 @@ export function createHelp(host: HelpHost): PluginDefinition {
           output.push(...pages([
             ...format.normalize("<b>功能模块</b>"), ...modules,
             ...format.normalize(`使用 ${code(prefix + "help [模块名]")} 查看模块详情`),
-          ]));
-        }
-        const quickModules: Block[] = [];
-        for (const plugin of [...plugins].filter((entry) => entry.commands.length === 1)
-          .sort((a, b) => a.id.localeCompare(b.id))) {
-          const command = plugin.commands[0];
-          quickModules.push(...format.normalize(
-            `<b>${pluginTitle(plugin.id)}</b>　${escape(command.description || plugin.description)}`,
-          ));
-        }
-        if (quickModules.length) {
-          output.push(...pages([
-            ...format.normalize("<b>快捷模块</b>"), ...quickModules,
-            ...format.normalize(`使用 ${code(prefix + "help [模块名]")} 查看详细说明`),
           ]));
         }
       } else {
