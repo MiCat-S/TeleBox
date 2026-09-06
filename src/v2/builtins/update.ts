@@ -1,10 +1,24 @@
-import {definePlugin} from "../sdk";
-import {readFile} from "node:fs/promises";
+import {definePlugin, type PluginContext} from "../sdk";
+import {randomUUID} from "node:crypto";
+import {readFile, unlink} from "node:fs/promises";
 import path from "node:path";
 import {isOwner} from "../permissions";
 
+type Receipt = {ownerId: string; chatId: string; messageId: number; requestedAt: number; bootId: string};
+type UpdateState = {pending: Receipt | null};
+
 export default function createUpdate(root = process.cwd(), ownerId?: string) {
-  return definePlugin({apiVersion: 1, id: "update", description: "检查并更新 MiBot",
+  const bootId = randomUUID();
+  let context: PluginContext | undefined;
+  let submitted = false;
+  const store = (ctx: PluginContext) => ctx.storage.json<UpdateState>("update-receipt.json", {pending: null});
+  const resultFile = path.join(root, "temp", "update-result.json");
+  const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
+    state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
+      ? {pending: null} : state);
+  const definition = definePlugin({apiVersion: 1, id: "update", description: "检查并更新 MiBot",
+    setup(ctx) { context = ctx; },
+    cleanup() { context = undefined; },
     commands: {update: {description: "查看版本与自动更新状态", async handle(invocation, ctx) {
       const sub = invocation.args[0]?.toLowerCase() ?? "run";
       if (sub === "ver" || sub === "version") {
@@ -34,13 +48,50 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
           await ctx.telegram.edit(invocation.message, `<b>更新检查完成</b>\n<pre>${result.stdout.toString("utf8").slice(0, 3000)}</pre>`, {parseMode: "html"});
           return;
         }
-        await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n已提交独立更新任务，服务重启不会中断更新。\n请稍候查看结果。", {parseMode: "html"});
-        await ctx.processes.run("/usr/bin/systemd-run", ["--quiet", "--collect", "--unit=mibot-update",
-          "--service-type=oneshot", "/usr/bin/bash", path.join(root, "scripts/update-service.sh"), root],
-          {timeoutMs: 5000, maxOutputBytes: 2000});
+        const receipt: Receipt = {ownerId: ownerId ?? "", chatId: invocation.message.chatId,
+          messageId: invocation.message.id, requestedAt: Date.now(), bootId};
+        await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
+        await store(ctx).update(() => ({pending: receipt}));
+        try {
+          await ctx.processes.run("/usr/bin/systemd-run", ["--quiet", "--collect", "--unit=mibot-update",
+            "--service-type=oneshot", "/usr/bin/bash", path.join(root, "scripts/update-service.sh"), root],
+            {timeoutMs: 5000, maxOutputBytes: 2000});
+          submitted = true;
+        } catch (error) {
+          await clear(ctx, receipt);
+          throw error;
+        }
         return;
       }
       await ctx.telegram.edit(invocation.message, `用法：${invocation.prefix}update ver|check|run|auto`);
     }}},
   });
+  return Object.freeze({...definition, async notifyReady(): Promise<void> {
+    const ctx = context;
+    if (!ctx || submitted) return;
+    try {
+      const {pending} = await store(ctx).read();
+      if (!pending || pending.bootId === bootId) return;
+      const age = Date.now() - pending.requestedAt;
+      if (pending.ownerId !== ownerId || !/^-?[0-9]+$/.test(pending.chatId) ||
+          !Number.isSafeInteger(pending.messageId) || pending.messageId <= 0 ||
+          !Number.isFinite(age) || age < 0 || age > 10 * 60_000) {
+        await clear(ctx, pending);
+        return;
+      }
+      let status: "success" | "failed" | undefined;
+      try {
+        const result = JSON.parse(await readFile(resultFile, "utf8")) as {status?: unknown};
+        if (result.status === "success" || result.status === "failed") status = result.status;
+      } catch {}
+      if (!status) return;
+      await ctx.telegram.edit({id: pending.messageId, chatId: pending.chatId, text: "", outgoing: true},
+        status === "success" ? "<b>MiBot 更新成功</b>\n代码、依赖和插件已更新，服务已重新上线。"
+          : "<b>MiBot 更新失败</b>\n服务保持当前版本，请查看 <code>.update check</code> 或服务器日志。", {parseMode: "html"});
+      await clear(ctx, pending);
+      try { await unlink(resultFile); } catch {}
+    } catch {
+      if (!ctx.signal.aborted) ctx.log.error("update.receipt_failed");
+    }
+  }});
 }
