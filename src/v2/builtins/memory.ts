@@ -6,18 +6,23 @@ const defaults: MemoryConfig = {enabled: false, heap: 150, rss: 512, silent: fal
 function snapshot() {
   const value = process.memoryUsage();
   return {heap: value.heapUsed / 1048576, heapTotal: value.heapTotal / 1048576,
-    rss: value.rss / 1048576, external: value.external / 1048576};
+    rss: value.rss / 1048576, external: value.external / 1048576,
+    arrayBuffers: value.arrayBuffers / 1048576};
 }
 function html(value: number): string {return value.toFixed(2);}
 function report(config: MemoryConfig): string {
   const m = snapshot();
   const level = m.rss > config.rss || m.heap > config.heap ? "偏高" : "正常";
+  const heapPercent = m.heapTotal > 0 ? (m.heap / m.heapTotal) * 100 : 0;
+  const baseline = config.baselineRss === undefined ? "" :
+    `\nRSS 变化: <code>${m.rss >= config.baselineRss ? "+" : ""}${html(m.rss - config.baselineRss)} MB</code>`;
   return `<b>内存状态</b>\n\n` +
-    `Heap: <code>${html(m.heap)} / ${config.heap} MB</code>\n` +
-    `RSS: <code>${html(m.rss)} / ${config.rss} MB</code>\n` +
-    `External: <code>${html(m.external)} MB</code>\n` +
+    `RSS（进程总占用）: <code>${html(m.rss)} / ${config.rss} MB</code>\n` +
+    `Heap（JS 已用）: <code>${html(m.heap)} / ${html(m.heapTotal)} MB</code>　<code>${html(heapPercent)}%</code>\n` +
+    `External（原生内存）: <code>${html(m.external)} MB</code>\n` +
+    `ArrayBuffer（缓冲区）: <code>${html(m.arrayBuffers)} MB</code>\n` +
     `状态: <b>${level}</b>\n` +
-    `基线: <code>${config.baselineRss === undefined ? "未设置" : html(config.baselineRss) + " MB RSS"}</code>\n` +
+    `基线 RSS: <code>${config.baselineRss === undefined ? "未设置" : html(config.baselineRss) + " MB"}</code>${baseline}\n` +
     `自动保护: <b>${config.enabled ? "开启" : "关闭"}</b>`;
 }
 function parsePositive(value: string | undefined): number | undefined {
