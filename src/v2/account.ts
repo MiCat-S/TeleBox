@@ -77,6 +77,11 @@ export async function assertLegacyStopped(root: string): Promise<void> {
     try {
       if (await fs.realpath(`/proc/${pid}/cwd`) !== directory) continue;
       const executable = path.basename(await fs.readlink(`/proc/${pid}/exe`));
+      // PM2 is the direct supervisor, not a second account client.
+      if (Number(pid) === process.ppid && /^(node|nodejs)$/.test(executable)) {
+        const title = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0")[0];
+        if (/^PM2 v\d+\.\d+\.\d+: God Daemon \(.+\)$/.test(title)) continue;
+      }
       if (/^(node|nodejs|bun|deno)(?:-[\d.]+)?$/.test(executable)) throw new AccountError("LEGACY");
     } catch (error) {
       if (isCode(error, "ENOENT") || isCode(error, "ESRCH")) continue;
