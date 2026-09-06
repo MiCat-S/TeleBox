@@ -34,11 +34,10 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
           await ctx.telegram.edit(invocation.message, `<b>更新检查完成</b>\n<pre>${result.stdout.toString("utf8").slice(0, 3000)}</pre>`, {parseMode: "html"});
           return;
         }
-        await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在拉取代码、安装依赖并重新构建…", {parseMode: "html"});
-        await ctx.processes.run("/usr/bin/git", ["-C", root, "pull", "--ff-only", "origin", "main"], {timeoutMs: 30000, maxOutputBytes: 8000});
-        await ctx.processes.run("/usr/bin/npm", ["ci"], {cwd: root, timeoutMs: 120000, maxOutputBytes: 8000});
-        await ctx.processes.run("/usr/bin/npm", ["run", "package:v2"], {cwd: root, timeoutMs: 120000, maxOutputBytes: 8000});
-        await ctx.processes.run("/usr/bin/systemctl", ["--no-block", "restart", "mibot.service"], {timeoutMs: 5000, maxOutputBytes: 1000});
+        await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n已提交独立更新任务，服务重启不会中断更新。\n请稍候查看结果。", {parseMode: "html"});
+        await ctx.processes.run("/usr/bin/systemd-run", ["--quiet", "--collect", "--unit=mibot-update",
+          "--service-type=oneshot", "/usr/bin/bash", path.join(root, "scripts/update-service.sh"), root],
+          {timeoutMs: 5000, maxOutputBytes: 2000});
         return;
       }
       await ctx.telegram.edit(invocation.message, `用法：${invocation.prefix}update ver|check|run|auto`);
