@@ -82,7 +82,14 @@ export async function assertLegacyStopped(root: string): Promise<void> {
         const title = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0")[0];
         if (/^PM2 v\d+\.\d+\.\d+: God Daemon \(.+\)$/.test(title)) continue;
       }
-      if (/^(node|nodejs|bun|deno)(?:-[\d.]+)?$/.test(executable)) throw new AccountError("LEGACY");
+      if (/^(node|nodejs|bun|deno)(?:-[\d.]+)?$/.test(executable)) {
+        const command = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8"));
+        // Reject the legacy account entrypoint, while allowing supervisors and
+        // unrelated short-lived Node helpers in the same working directory.
+        if (command.includes("/src/index.ts") || command.includes("scripts/run-tsx.cjs")) {
+          throw new AccountError("LEGACY");
+        }
+      }
     } catch (error) {
       if (isCode(error, "ENOENT") || isCode(error, "ESRCH")) continue;
       // A hidden process cannot prove account exclusivity; fail closed.
