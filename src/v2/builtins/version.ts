@@ -22,6 +22,9 @@ export default function createVersion(root = process.cwd()) {
         `PID: <code>${process.pid}</code>`,
       ].join("\n");
       await ctx.telegram.edit(invocation.message, text, {parseMode: "html"});
+    }}, ver: {description: "version 的简写", async handle(invocation, ctx) {
+      const text = `<b>TeleBox 版本</b>\nNode.js: <code>${process.version}</code>\n平台: <code>${process.platform}/${process.arch}</code>`;
+      await ctx.telegram.edit(invocation.message, text, {parseMode: "html"});
     }}},
   });
 }
