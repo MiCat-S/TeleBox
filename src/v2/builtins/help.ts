@@ -209,7 +209,7 @@ export function createHelp(host: HelpHost): PluginDefinition {
           .sort((a, b) => a.id.localeCompare(b.id))) {
           const command = plugin.commands[0];
           quickModules.push(...format.normalize(
-            `<b>${pluginTitle(plugin.id)}</b>　${escape(plugin.description || command.description)}`,
+            `<b>${pluginTitle(plugin.id)}</b>　${escape(command.description || plugin.description)}`,
           ));
         }
         if (quickModules.length) {
