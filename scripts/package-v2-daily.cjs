@@ -5,7 +5,7 @@ const path = require('node:path');
 const {build} = require('./build-v2.cjs');
 const {buildPlugin} = require('./build-v2-plugin.cjs');
 
-const DAILY_PLUGINS = Object.freeze(['ai', 'da', 'dc', 'dme', 'gt', 'ids', 'ip', 'nodeseek', 'rate', 'sum', 'yvlu']);
+const DAILY_PLUGINS = Object.freeze(['ai', 'da', 'dc', 'dme', 'gt', 'ids', 'ip', 'nodeseek', 'rate', 'sum', 'yvlu', 'aban']);
 
 function packageDaily(options = {}) {
   const project = fs.realpathSync(options.project || path.resolve(__dirname, '..'));

@@ -5,7 +5,7 @@ const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const {randomBytes} = require('node:crypto');
 const {setTimeout: delay} = require('node:timers/promises');
-const DAILY_PLUGINS = Object.freeze(['ai', 'da', 'dc', 'dme', 'gt', 'ids', 'ip', 'nodeseek', 'rate', 'sum', 'yvlu']);
+const DAILY_PLUGINS = Object.freeze(['ai', 'da', 'dc', 'dme', 'gt', 'ids', 'ip', 'nodeseek', 'rate', 'sum', 'yvlu', 'aban']);
 
 const production = '/root/telebox';
 function assertStopped(entries) {
@@ -301,7 +301,7 @@ async function live(root) {
     ? {completed: value.completed, pendingTasks: value.pendingTasks, pendingResources: value.pendingResources, errors: value.errors?.length} : value]));
   const report = {mode: 'server-live-check', result: failure ? 'failed' : 'ok', node: process.version,
     checks, counts, compilerResident, shutdown: reports, peakRssKiB: process.resourceUsage().maxRSS,
-    coverage: 'existing session, account lock, 11 daily plugin load, Saved Messages RPC dispatch, AI chat, GT translation and image generation; destructive DA and DME commands excluded'};
+    coverage: 'existing session, account lock, 12 daily plugin load, Saved Messages RPC dispatch, AI chat, GT translation and image generation; destructive DA, DME and ABAN commands excluded'};
   fs.writeFileSync(path.join(root, 'result.json'), JSON.stringify(report, null, 2) + '\n', {mode: 0o600});
   console.log(JSON.stringify(report));
   process.exitCode = failure ? 1 : 0;
