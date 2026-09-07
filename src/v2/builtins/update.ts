@@ -52,6 +52,16 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+  const processOwnerHint = (): string => {
+    try {
+      const uid = typeof process.getuid === "function" ? process.getuid() : NaN;
+      if (Number.isNaN(uid)) return "运行环境未提供当前用户标识。";
+      return uid === 0 ? "当前运行在 root 用户。"
+        : `当前运行用户 UID=${uid}，通常需要 root 或有 systemd 管理权限才可启动更新服务。`;
+    } catch {
+      return "未能读取运行时用户信息。";
+    }
+  };
   const formatUpdateResult = (result: Partial<UpdateResult>): string | null => {
     if (result.status !== "failed") return null;
     const reason = typeof result.reason === "string" ? result.reason.trim() : "";
@@ -149,7 +159,8 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
             submitted = false;
             await reportFailure(ctx, receipt,
               `<b>MiBot 更新失败</b>\n更新任务未启动：更新服务未正确加载。\n` +
-              `服务检查结果：${status}\n\n请先执行：<code>bash scripts/install-service.sh</code> 或确认服务文件是否存在。`);
+              `服务检查结果：${status}\n\n请先执行：<code>bash scripts/install-service.sh</code> 或确认服务文件是否存在。\n` +
+              processOwnerHint());
             return;
           }
           await ctx.processes.run("/usr/bin/systemctl", ["reset-failed", updateService], {timeoutMs: 5000, maxOutputBytes: 2000});
@@ -162,7 +173,8 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
           const logs = await readServiceLog(ctx);
           const status = await readServiceStatus(ctx);
           await reportFailure(ctx, receipt,
-            `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n服务状态：${status}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>\n<code>systemctl show ${updateService}</code>${logs}`);
+            `<b>MiBot 更新失败</b>\n启动更新任务失败：${summarizeProcessError(error)}\n\n服务状态：${status}\n\n请检查服务文件与权限：\n<code>systemctl status ${updateService} --no-pager</code>\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>\n<code>systemctl show ${updateService}</code>\n` +
+            `${processOwnerHint()}${logs}`);
           return;
         }
         watchResult(ctx, receipt);

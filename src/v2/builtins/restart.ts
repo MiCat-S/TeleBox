@@ -13,6 +13,15 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
+  const processOwnerHint = (): string => {
+    try {
+      const uid = typeof process.getuid === "function" ? process.getuid() : NaN;
+      return Number.isNaN(uid) ? "当前运行环境未提供用户标识。"
+        : uid === 0 ? "当前运行在 root 用户。" : `当前运行用户 UID=${uid}，通常需要 root 或 systemd 管理权限。`;
+    } catch {
+      return "未能读取运行时用户信息。";
+    }
+  };
   const definition = definePlugin({apiVersion: 1, id: "restart", description: "重启 MiBot systemd 服务",
     setup(ctx) { context = ctx; },
     cleanup() { context = undefined; },
@@ -43,7 +52,7 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
         if (!ctx.signal.aborted && !shutdownSignal?.aborted) {
           submitted = false;
           await clear(ctx, receipt);
-          await ctx.telegram.edit(invocation.message, "服务重启命令执行失败");
+          await ctx.telegram.edit(invocation.message, `服务重启命令执行失败。${processOwnerHint()}`);
         }
       }
     },},},
