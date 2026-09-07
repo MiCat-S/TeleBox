@@ -76,7 +76,7 @@ test("failed notice prevents restarting", async t => {
 test("process failures produce a sanitized message", async t => {
   const f = fixture({fail: true}); t.after(f.restore);
   await createRestart("123").commands.restart.handle(f.inv, f.ctx);
-  assert.equal(f.edits.at(-1), "服务重启命令执行失败");
+  assert.match(f.edits.at(-1), /^服务重启命令执行失败/);
   assert.doesNotMatch(f.edits.join(""), /private/);
 });
 test("environment owner cannot override authenticated account identity", async t => {
@@ -107,7 +107,7 @@ test("runtime shutdown suppresses process failure while plugin scope is still ac
 test("process failure remains visible when runtime shutdown has not started", async t => {
   const f = fixture({fail: true}); t.after(f.restore);
   await createRestart("123", new AbortController().signal).commands.restart.handle(f.inv, f.ctx);
-  assert.equal(f.edits.at(-1), "服务重启命令执行失败");
+  assert.match(f.edits.at(-1), /^服务重启命令执行失败/);
   assert.equal(f.state().pending, null);
 });
 test("new runtime edits the original message once after readiness", async t => {

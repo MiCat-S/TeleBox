@@ -9,6 +9,7 @@ import type {ProcessError} from "../processes";
 type Receipt = {ownerId: string; chatId: string; messageId: number; requestedAt: number; bootId: string};
 type UpdateState = {pending: Receipt | null};
 type UpdateResult = {status: "success" | "failed"; reason?: string | null};
+type ServiceStatusRow = {key: string; value: string};
 
 export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const bootId = randomUUID();
@@ -20,21 +21,38 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
-  const readServiceStatus = async (ctx: PluginContext): Promise<string> => {
+  const readServiceStatusRows = async (ctx: PluginContext): Promise<ServiceStatusRow[]> => {
     const fields = ["LoadState", "ActiveState", "UnitFileState", "SubState", "CanStart", "FragmentPath"];
-    const rows: string[] = [];
+    const rows: ServiceStatusRow[] = [];
     for (const field of fields) {
       try {
         const value = await ctx.processes.run("/usr/bin/systemctl",
           ["show", "--value", `-p`, field, updateService],
           {timeoutMs: 1500, maxOutputBytes: 600});
         const text = value.stdout.toString("utf8").trim() || "unknown";
-        rows.push(`${field}: ${text}`);
+        rows.push({key: field, value: text});
       } catch {
-        rows.push(`${field}: unavailable`);
+        rows.push({key: field, value: "unavailable"});
       }
     }
-    return rows.join("<br>");
+    return rows;
+  };
+  const readServiceStatus = async (ctx: PluginContext): Promise<string> =>
+    (await readServiceStatusRows(ctx)).map(({key, value}) => `${key}: ${value}`).join("<br>");
+  const parseServiceStatusMap = (statusRows: readonly ServiceStatusRow[]): Record<string, string> =>
+    Object.fromEntries(statusRows.map(item => [item.key, item.value]));
+  const serviceStatusHint = (statusRows: readonly ServiceStatusRow[]): string => {
+    const statusMap = parseServiceStatusMap(statusRows);
+    if (statusMap.CanStart === "no") {
+      return "更新服务当前不可启动（CanStart=no），通常表示当前运行上下文没有 systemd 管理权限。";
+    }
+    if (statusMap.LoadState !== "loaded") {
+      return "更新服务未正确加载，请先执行 <code>bash scripts/install-service.sh</code> 安装/修复系统服务。";
+    }
+    if (statusMap.FragmentPath === "unavailable" || !statusMap.FragmentPath) {
+      return "未检测到更新服务文件路径，请检查 `/etc/systemd/system/mibot-update.service` 是否存在。";
+    }
+    return "";
   };
   const summarizeProcessError = (error: unknown): string => {
     if (error instanceof Error && (error as ProcessError).code) {
@@ -138,6 +156,13 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
           await ctx.telegram.edit(invocation.message, "只有账号所有者可以更新 MiBot");
           return;
         }
+        const runningAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
+        if (!runningAsRoot) {
+          await ctx.telegram.edit(invocation.message,
+            `<b>MiBot 更新失败</b>\n当前进程 UID=${typeof process.getuid === "function" ? process.getuid() : "unknown"}，` +
+            "无法直接发起 systemd 服务更新。请让 MiBot 服务以 root 运行后再试（安装脚本会处理 service）。");
+          return;
+        }
         if (sub === "check") {
           const result = await ctx.processes.run("/usr/bin/git", ["-C", root, "fetch", "origin", "main"], {timeoutMs: 30000, maxOutputBytes: 4000});
           await ctx.telegram.edit(invocation.message, `<b>更新检查完成</b>\n<pre>${result.stdout.toString("utf8").slice(0, 3000)}</pre>`, {parseMode: "html"});
@@ -154,11 +179,13 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
         await ctx.telegram.edit(invocation.message, "<b>MiBot 更新</b>\n正在更新代码、依赖和插件…", {parseMode: "html"});
         await store(ctx).update(() => ({pending: receipt}));
         try {
-          const status = await readServiceStatus(ctx);
-          if (!status.includes("LoadState: loaded")) {
+          const statusRows = await readServiceStatusRows(ctx);
+          const status = statusRows.map(({key, value}) => `${key}: ${value}`).join("<br>");
+          const hint = serviceStatusHint(statusRows);
+          if (hint) {
             submitted = false;
             await reportFailure(ctx, receipt,
-              `<b>MiBot 更新失败</b>\n更新任务未启动：更新服务未正确加载。\n` +
+              `<b>MiBot 更新失败</b>\n${hint}\n` +
               `服务检查结果：${status}\n\n请先执行：<code>bash scripts/install-service.sh</code> 或确认服务文件是否存在。\n` +
               processOwnerHint());
             return;

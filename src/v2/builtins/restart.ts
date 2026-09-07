@@ -13,6 +13,21 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
+  const readServiceStatus = async (ctx: PluginContext): Promise<string> => {
+    const fields = ["LoadState", "ActiveState", "SubState", "FragmentPath"];
+    const rows: string[] = [];
+    for (const field of fields) {
+      try {
+        const value = await ctx.processes.run("/usr/bin/systemctl",
+          ["show", "--value", `-p`, field, "mibot.service"],
+          {timeoutMs: 1500, maxOutputBytes: 600});
+        rows.push(`${field}: ${value.stdout.toString("utf8").trim() || "unknown"}`);
+      } catch {
+        rows.push(`${field}: unavailable`);
+      }
+    }
+    return rows.join("<br>");
+  };
   const processOwnerHint = (): string => {
     try {
       const uid = typeof process.getuid === "function" ? process.getuid() : NaN;
@@ -52,7 +67,9 @@ export default function createRestart(ownerId: string, shutdownSignal?: AbortSig
         if (!ctx.signal.aborted && !shutdownSignal?.aborted) {
           submitted = false;
           await clear(ctx, receipt);
-          await ctx.telegram.edit(invocation.message, `服务重启命令执行失败。${processOwnerHint()}`);
+          const status = await readServiceStatus(ctx);
+          await ctx.telegram.edit(invocation.message, `服务重启命令执行失败。\n状态：${status}\n` +
+            `${processOwnerHint()}\n\n可执行 <code>systemctl status mibot.service --no-pager</code> 查看详情。`, {parseMode: "html"});
         }
       }
     },},},
