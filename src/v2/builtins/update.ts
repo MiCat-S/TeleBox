@@ -10,6 +10,16 @@ type Receipt = {ownerId: string; chatId: string; messageId: number; requestedAt:
 type UpdateState = {pending: Receipt | null};
 type UpdateResult = {status: "success" | "failed"; reason?: string | null};
 type ServiceStatusRow = {key: string; value: string};
+type ServiceStatusField = "LoadState" | "ActiveState" | "UnitFileState" | "SubState" | "CanStart" | "FragmentPath" | "Result";
+const statusFields: readonly ServiceStatusField[] = [
+  "LoadState",
+  "ActiveState",
+  "UnitFileState",
+  "SubState",
+  "CanStart",
+  "FragmentPath",
+  "Result",
+];
 
 export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const bootId = randomUUID();
@@ -21,8 +31,7 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
   const clear = (ctx: PluginContext, receipt: Receipt) => store(ctx).update(state =>
     state.pending?.bootId === receipt.bootId && state.pending.requestedAt === receipt.requestedAt
       ? {pending: null} : state);
-  const readServiceStatusRows = async (ctx: PluginContext): Promise<ServiceStatusRow[]> => {
-    const fields = ["LoadState", "ActiveState", "UnitFileState", "SubState", "CanStart", "FragmentPath"];
+  const readServiceStatusRows = async (ctx: PluginContext, fields = statusFields): Promise<ServiceStatusRow[]> => {
     const rows: ServiceStatusRow[] = [];
     for (const field of fields) {
       try {
@@ -51,6 +60,14 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
     }
     if (statusMap.FragmentPath === "unavailable" || !statusMap.FragmentPath) {
       return "未检测到更新服务文件路径，请检查 `/etc/systemd/system/mibot-update.service` 是否存在。";
+    }
+    return "";
+  };
+  const serviceStartupFailureHint = (statusRows: readonly ServiceStatusRow[]): string => {
+    const statusMap = parseServiceStatusMap(statusRows);
+    if (statusMap.ActiveState === "failed") return "更新服务已启动后立即进入失败状态。";
+    if (statusMap.ActiveState === "inactive" && statusMap.Result && !["", "success", "done", "skipped"].includes(statusMap.Result)) {
+      return `更新服务启动后立即退出（Result=${escapeHtml(statusMap.Result)}）。`;
     }
     return "";
   };
@@ -194,6 +211,16 @@ export default function createUpdate(root = process.cwd(), ownerId?: string) {
           await ctx.processes.run("/usr/bin/systemctl", ["daemon-reload"], {timeoutMs: 5000, maxOutputBytes: 2000});
           await ctx.processes.run("/usr/bin/systemctl", ["start", "--no-block", updateService],
             {timeoutMs: 5000, maxOutputBytes: 2000});
+          const startupRows = await readServiceStatusRows(ctx, ["LoadState", "ActiveState", "Result", "SubState", "FragmentPath"]);
+          const startupHint = serviceStartupFailureHint(startupRows);
+          if (startupHint) {
+            submitted = false;
+            const failureStatus = startupRows.map(({key, value}) => `${key}: ${value}`).join("<br>");
+            await reportFailure(ctx, receipt,
+              `<b>MiBot 更新失败</b>\n${startupHint}\n` +
+              `服务检查结果：${failureStatus}\n\n请查看服务日志：\n<code>journalctl -u ${updateService} -n 80 --no-pager</code>`);
+            return;
+          }
           submitted = true;
         } catch (error) {
           submitted = false;
